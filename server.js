@@ -43,7 +43,7 @@ app.post('/result', async (req, res) => {
         
         console.log('Text to humanize:', textToHumanize);
         
-        // Humanize the text with longer timeout
+        // Humanize the text
         const humanized = await humanizeText(textToHumanize.trim());
         
         // Display the result
@@ -75,6 +75,161 @@ app.post('/result', async (req, res) => {
     }
 });
 
+// Humanize function with human-like behavior
+async function humanizeText(text) {
+    let browser;
+    try {
+        console.log('Starting humanization for:', text.substring(0, 50));
+        
+        // Random user agents to appear more human
+        const userAgents = [
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
+        ];
+        
+        const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+        
+        browser = await chromium.launch({ 
+            headless: true,
+            args: [
+                '--no-sandbox', 
+                '--disable-setuid-sandbox',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-dev-shm-usage',
+                '--disable-web-security',
+                '--disable-features=IsolateOrigins,site-per-process'
+            ]
+        });
+        
+        const context = await browser.newContext({
+            userAgent: randomUA,
+            viewport: { width: 1366, height: 768 },
+            ignoreHTTPSErrors: true
+        });
+        
+        const page = await context.newPage();
+        
+        // Add stealth scripts
+        await page.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', {
+                get: () => undefined
+            });
+        });
+        
+        // Set random delays to appear human
+        const randomDelay = () => Math.floor(Math.random() * 1000) + 500;
+        
+        // Navigate with a real referrer
+        await page.goto('https://ai-text-humanizer.com/', {
+            waitUntil: 'domcontentloaded',
+            timeout: 30000
+        });
+        
+        // Random delay like a human would take
+        await page.waitForTimeout(randomDelay());
+        
+        // Wait for elements to be ready
+        await page.waitForSelector('#textareaBefore', { timeout: 20000 });
+        console.log('Found input field');
+        
+        // Simulate human typing with delays
+        await page.click('#textareaBefore');
+        await page.waitForTimeout(randomDelay());
+        
+        // Clear the field
+        await page.keyboard.down('Control');
+        await page.keyboard.press('a');
+        await page.keyboard.up('Control');
+        await page.waitForTimeout(300);
+        
+        // Type with human-like speed
+        for (const char of text) {
+            await page.keyboard.type(char);
+            await page.waitForTimeout(Math.random() * 50 + 10);
+        }
+        
+        console.log('Filled input');
+        
+        // Wait before clicking
+        await page.waitForTimeout(randomDelay());
+        
+        // Click the humanize button
+        await page.click('#btnGo');
+        console.log('Clicked button');
+        
+        // Enhanced waiting strategy
+        let result = '';
+        let attempts = 0;
+        const maxAttempts = 60; // 60 seconds max
+        
+        while (attempts < maxAttempts && !result) {
+            await page.waitForTimeout(1000);
+            
+            // Check multiple selectors
+            result = await page.evaluate(() => {
+                // Try multiple methods to get the result
+                const textarea = document.querySelector('#textareaAfter');
+                if (textarea) {
+                    return textarea.value || textarea.textContent || textarea.innerText || '';
+                }
+                
+                // Alternative selectors in case the site changes
+                const altTextarea = document.querySelector('textarea:last-of-type');
+                if (altTextarea) {
+                    return altTextarea.value || altTextarea.textContent || '';
+                }
+                
+                return '';
+            });
+            
+            attempts++;
+            
+            if (result && result.trim() !== '' && result !== text && result.length > 10) {
+                console.log('Got result after', attempts, 'seconds');
+                break;
+            }
+            
+            // Log progress every 10 seconds
+            if (attempts % 10 === 0) {
+                console.log(`Still waiting... attempt ${attempts}`);
+            }
+        }
+        
+        // Try additional methods if still no result
+        if (!result || result === text) {
+            console.log('Trying additional methods');
+            
+            // Take screenshot for debugging
+            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
+            
+            // Check if there's any error message
+            const errorMessage = await page.evaluate(() => {
+                const errors = document.querySelectorAll('.error, .warning, .alert');
+                for (const error of errors) {
+                    if (error.textContent) return error.textContent;
+                }
+                return '';
+            });
+            
+            if (errorMessage) {
+                console.log('Error message:', errorMessage);
+            }
+        }
+        
+        console.log('Final result:', result);
+        return result || 'The AI humanizer is currently unavailable. Please try again later.';
+        
+    } catch (error) {
+        console.error('Error in humanizeText:', error);
+        return `Error: ${error.message}`;
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
+    }
+}
+
 // Direct API endpoint
 app.post('/humanize', async (req, res) => {
     try {
@@ -84,116 +239,5 @@ app.post('/humanize', async (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
-// Enhanced humanize function with multiple strategies
-async function humanizeText(text) {
-    let browser;
-    try {
-        console.log('Starting humanization for:', text.substring(0, 50));
-        
-        browser = await chromium.launch({ 
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
-        });
-        
-        const page = await browser.newPage();
-        
-        // Set page timeout
-        page.setDefaultTimeout(60000);
-        
-        // Wait for the page to load completely
-        await page.goto('https://ai-text-humanizer.com/', {
-            waitUntil: 'networkidle',
-            timeout: 30000
-        });
-        
-        // Wait for elements to be ready
-        await page.waitForSelector('#textareaBefore', { timeout: 20000 });
-        console.log('Found input field');
-        
-        // Clear and fill input textarea
-        await page.fill('#textareaBefore', '');
-        await page.fill('#textareaBefore', text);
-        console.log('Filled input');
-        
-        // Wait a bit before clicking
-        await page.waitForTimeout(2000);
-        
-        // Click the humanize button
-        await page.click('#btnGo');
-        console.log('Clicked button');
-        
-        // Wait and check for output with extended retries
-        let result = '';
-        let attempts = 0;
-        const maxAttempts = 45; // 45 seconds max
-        
-        while (attempts < maxAttempts && !result) {
-            await page.waitForTimeout(1000);
-            
-            // Try multiple ways to get the result
-            result = await page.evaluate(() => {
-                const textarea = document.querySelector('#textareaAfter');
-                if (textarea) {
-                    // Check value first, then textContent
-                    return textarea.value || textarea.textContent || textarea.innerText || '';
-                }
-                return '';
-            });
-            
-            attempts++;
-            console.log(`Attempt ${attempts}, result length:`, result?.length || 0);
-            
-            // Check if we got a meaningful result
-            if (result && result.trim() !== '' && result !== text && result.length > 10) {
-                console.log('Got result after', attempts, 'seconds');
-                break;
-            }
-        }
-        
-        // Final check with different approach
-        if (!result || result === text || result.trim() === '') {
-            console.log('Trying alternative approach');
-            
-            // Wait a bit more
-            await page.waitForTimeout(5000);
-            
-            // Try to detect if the button is still processing
-            const isProcessing = await page.evaluate(() => {
-                const button = document.querySelector('#btnGo');
-                return button ? button.disabled || button.classList.contains('loading') : false;
-            });
-            
-            if (isProcessing) {
-                console.log('Still processing, waiting more...');
-                await page.waitForTimeout(10000);
-                
-                // Try one more time
-                result = await page.inputValue('#textareaAfter');
-            }
-        }
-        
-        // Final fallback - take screenshot for debugging
-        if (!result || result === text) {
-            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
-            console.log('Saved debug screenshot');
-        }
-        
-        console.log('Final result:', result);
-        return result || 'The AI humanizer is taking longer than expected. Please try again in a moment.';
-        
-    } catch (error) {
-        console.error('Error in humanizeText:', error);
-        return `Error: ${error.message}. Please try again.`;
-    } finally {
-        if (browser) {
-            try {
-                await browser.close();
-            } catch (e) {
-                console.error('Error closing browser:', e);
-            }
-        }
-    }
-}
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
