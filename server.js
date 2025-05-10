@@ -105,148 +105,61 @@ async function humanizeWithGhostAI(text) {
         console.log('Loaded Ghost AI');
         
         // Wait for the page to be fully loaded
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(5000);
         
-        // Find and fill the input textarea
-        // Adjust these selectors based on actual Ghost AI structure
-        const inputSelectors = [
-            'textarea[placeholder*="paste"]',
-            'textarea[placeholder*="text"]',
-            'textarea:first-of-type',
-            '#input-text',
-            '.input-area textarea'
-        ];
+        // Click the Strong button (it's the third button)
+        await page.click('button:has-text("Strong")');
+        console.log('Selected Strong mode');
+        await page.waitForTimeout(1000);
         
-        let inputFilled = false;
-        for (const selector of inputSelectors) {
-            try {
-                await page.waitForSelector(selector, { timeout: 5000 });
-                await page.fill(selector, text);
-                console.log(`Filled input with selector: ${selector}`);
-                inputFilled = true;
-                break;
-            } catch (e) {
-                continue;
-            }
+        // Find and fill the input textarea (left column)
+        await page.waitForSelector('textarea', { timeout: 10000 });
+        const textareas = await page.$$('textarea');
+        
+        if (textareas.length >= 1) {
+            await textareas[0].click();
+            await textareas[0].fill(text);
+            console.log('Filled input text');
+        } else {
+            throw new Error('Could not find input textarea');
         }
         
-        if (!inputFilled) {
-            throw new Error('Could not find input field');
-        }
+        // Click the Humanize button
+        await page.click('button:has-text("Humanize")');
+        console.log('Clicked Humanize button');
         
-        // Set to Strong mode if there's a dropdown or option
-        // Look for strength/mode selector
-        const strengthSelectors = [
-            'select[name*="strength"]',
-            'select[name*="mode"]',
-            '.strength-selector',
-            '#mode-selector',
-            'button:has-text("Strong")',
-            'label:has-text("Strong")'
-        ];
-        
-        for (const selector of strengthSelectors) {
-            try {
-                const element = await page.$(selector);
-                if (element) {
-                    const tagName = await element.evaluate(el => el.tagName.toLowerCase());
-                    
-                    if (tagName === 'select') {
-                        await page.selectOption(selector, 'strong');
-                        console.log('Selected strong mode from dropdown');
-                    } else if (tagName === 'button' || tagName === 'label') {
-                        await page.click(selector);
-                        console.log('Clicked strong mode button');
-                    }
-                    break;
-                }
-            } catch (e) {
-                continue;
-            }
-        }
-        
-        // Find and click the humanize/process button
-        const buttonSelectors = [
-            'button:has-text("Humanize")',
-            'button:has-text("Process")',
-            'button:has-text("Generate")',
-            'button:has-text("Submit")',
-            'button[type="submit"]',
-            '.submit-btn',
-            '#humanize-btn',
-            '[type="button"]:has-text("Process")'
-        ];
-        
-        let buttonClicked = false;
-        for (const selector of buttonSelectors) {
-            try {
-                await page.click(selector);
-                console.log(`Clicked button with selector: ${selector}`);
-                buttonClicked = true;
-                break;
-            } catch (e) {
-                continue;
-            }
-        }
-        
-        if (!buttonClicked) {
-            // Try clicking any button that might be the submit button
-            const buttons = await page.$$('button[type="button"]');
-            for (const button of buttons) {
-                const text = await button.textContent();
-                if (text && (text.includes('Process') || text.includes('Humanize') || text.includes('Generate'))) {
-                    await button.click();
-                    console.log(`Clicked button with text: ${text}`);
-                    buttonClicked = true;
-                    break;
-                }
-            }
-        }
-        
-        if (!buttonClicked) {
-            throw new Error('Could not find submit button');
-        }
-        
-        // Wait for result with multiple attempts
+        // Wait for the result to appear in the right column
         let result = '';
         let attempts = 0;
-        const maxAttempts = 40;
-        
-        const outputSelectors = [
-            'textarea[placeholder*="output"]',
-            'textarea:last-of-type',
-            '#output-text',
-            '.output-area textarea',
-            '.result-area',
-            '#result',
-            '.response-text'
-        ];
+        const maxAttempts = 60; // 60 seconds max
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Try to get the result from various selectors
-            for (const selector of outputSelectors) {
-                try {
-                    const element = await page.$(selector);
-                    if (element) {
-                        result = await element.evaluate(el => el.value || el.textContent || el.innerText || '');
-                        if (result && result.trim() !== '' && result !== text && result.length > 10) {
-                            console.log(`Got result with selector: ${selector}`);
-                            break;
-                        }
+            // Check if processing is complete
+            const isProcessing = await page.evaluate(() => {
+                const button = document.querySelector('button:has-text("Humanize")');
+                return button ? button.disabled : false;
+            });
+            
+            if (!isProcessing) {
+                // Get the result from the right textarea
+                const rightTextarea = await page.evaluate(() => {
+                    const textareas = document.querySelectorAll('textarea');
+                    if (textareas.length >= 2) {
+                        return textareas[1].value || textareas[1].textContent || '';
                     }
-                } catch (e) {
-                    continue;
+                    return '';
+                });
+                
+                if (rightTextarea && rightTextarea.trim() !== '' && rightTextarea !== text && rightTextarea.length > 10) {
+                    result = rightTextarea;
+                    console.log('Got result from right column');
+                    break;
                 }
             }
             
             attempts++;
-            
-            if (result && result.trim() !== '' && result !== text) {
-                console.log('Got result after', attempts, 'seconds');
-                break;
-            }
             
             // Log progress every 10 seconds
             if (attempts % 10 === 0) {
@@ -254,7 +167,29 @@ async function humanizeWithGhostAI(text) {
             }
         }
         
-        console.log('Final result:', result);
+        // If still no result, try alternative methods
+        if (!result) {
+            console.log('Trying alternative detection method');
+            
+            // Take screenshot for debugging
+            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
+            
+            // Try to get any text from the right side
+            result = await page.evaluate(() => {
+                // Look for the right column container
+                const containers = document.querySelectorAll('.grid > div');
+                if (containers.length >= 2) {
+                    const rightContainer = containers[1];
+                    const textarea = rightContainer.querySelector('textarea');
+                    if (textarea) {
+                        return textarea.value || textarea.textContent || '';
+                    }
+                }
+                return '';
+            });
+        }
+        
+        console.log('Final result length:', result?.length || 0);
         return result || 'Could not get result from Ghost AI';
         
     } catch (error) {
