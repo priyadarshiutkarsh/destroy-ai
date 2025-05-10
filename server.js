@@ -107,8 +107,8 @@ async function humanizeWithGhostAI(text) {
         // Wait for the page to be fully loaded
         await page.waitForTimeout(5000);
         
-        // Click the Strong button (it's the third button)
-        await page.click('button:has-text("Strong")');
+        // Click the Strong button using proper Playwright selector
+        await page.click('text=Strong');
         console.log('Selected Strong mode');
         await page.waitForTimeout(1000);
         
@@ -125,7 +125,7 @@ async function humanizeWithGhostAI(text) {
         }
         
         // Click the Humanize button
-        await page.click('button:has-text("Humanize")');
+        await page.click('text=Humanize');
         console.log('Clicked Humanize button');
         
         // Wait for the result to appear in the right column
@@ -136,10 +136,15 @@ async function humanizeWithGhostAI(text) {
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check if processing is complete
+            // Check if processing is complete by looking at button state
             const isProcessing = await page.evaluate(() => {
-                const button = document.querySelector('button:has-text("Humanize")');
-                return button ? button.disabled : false;
+                const buttons = document.querySelectorAll('button');
+                for (const button of buttons) {
+                    if (button.textContent && button.textContent.includes('Humanize')) {
+                        return button.disabled;
+                    }
+                }
+                return false;
             });
             
             if (!isProcessing) {
@@ -177,12 +182,17 @@ async function humanizeWithGhostAI(text) {
             // Try to get any text from the right side
             result = await page.evaluate(() => {
                 // Look for the right column container
-                const containers = document.querySelectorAll('.grid > div');
-                if (containers.length >= 2) {
-                    const rightContainer = containers[1];
-                    const textarea = rightContainer.querySelector('textarea');
-                    if (textarea) {
-                        return textarea.value || textarea.textContent || '';
+                const textareas = document.querySelectorAll('textarea');
+                if (textareas.length >= 2) {
+                    return textareas[1].value || '';
+                }
+                
+                // Try alternative methods
+                const containers = document.querySelectorAll('div');
+                for (const container of containers) {
+                    const textarea = container.querySelector('textarea');
+                    if (textarea && textarea.value && textarea.value.length > 50) {
+                        return textarea.value;
                     }
                 }
                 return '';
