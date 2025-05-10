@@ -75,12 +75,11 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Ghost AI specific humanization function with detailed debugging
+// Ghost AI specific humanization function
 async function humanizeWithGhostAI(text) {
     let browser;
     try {
         console.log('Starting humanization with Ghost AI');
-        console.log('Input text length:', text.length);
         
         browser = await chromium.launch({ 
             headless: true,
@@ -108,9 +107,6 @@ async function humanizeWithGhostAI(text) {
         // Wait for the page to be fully loaded
         await page.waitForTimeout(5000);
         
-        // Take initial screenshot
-        await page.screenshot({ path: `ghost-initial-${Date.now()}.png`, fullPage: true });
-        
         // Click the Strong button
         await page.click('text=Strong');
         console.log('Selected Strong mode');
@@ -119,125 +115,125 @@ async function humanizeWithGhostAI(text) {
         // Find and fill the input textarea (left column)
         await page.waitForSelector('textarea', { timeout: 10000 });
         const textareas = await page.$$('textarea');
-        console.log('Found textareas:', textareas.length);
         
         if (textareas.length >= 1) {
-            // Clear the textarea first
             await textareas[0].click();
-            await page.keyboard.down('Control');
-            await page.keyboard.press('a');
-            await page.keyboard.up('Control');
-            await page.keyboard.press('Delete');
-            await page.waitForTimeout(1000);
-            
-            // Type the text
-            await textareas[0].type(text);
+            await textareas[0].fill(text);
             console.log('Filled input text');
-            
-            // Verify the text was entered
-            const inputValue = await textareas[0].evaluate(el => el.value);
-            console.log('Input value length after filling:', inputValue.length);
         } else {
             throw new Error('Could not find input textarea');
         }
         
-        // Take screenshot before clicking humanize
-        await page.screenshot({ path: `ghost-before-humanize-${Date.now()}.png`, fullPage: true });
-        
         // Click the Humanize button
         await page.click('text=Humanize');
         console.log('Clicked Humanize button');
-        await page.waitForTimeout(3000);
         
-        // Monitor the processing
+        // Wait for processing and check multiple locations for result
         let result = '';
         let attempts = 0;
-        const maxAttempts = 60; // 60 seconds max
-        let previousRightText = '';
+        const maxAttempts = 60;
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check button state
-            const buttonState = await page.evaluate(() => {
-                const buttons = document.querySelectorAll('button');
-                for (const button of buttons) {
-                    if (button.textContent && button.textContent.includes('Humanize')) {
-                        return {
-                            disabled: button.disabled,
-                            text: button.textContent,
-                            classes: button.className
-                        };
-                    }
-                }
-                return { disabled: false, text: 'not found', classes: '' };
-            });
-            
-            console.log(`Attempt ${attempts}: Button state -`, buttonState);
-            
-            // Get content from both textareas
-            const textareaContents = await page.evaluate(() => {
-                const textareas = document.querySelectorAll('textarea');
-                return Array.from(textareas).map((ta, i) => ({
-                    index: i,
-                    value: ta.value,
-                    length: ta.value.length
-                }));
-            });
-            
-            console.log(`Attempt ${attempts}: Textareas -`, textareaContents);
-            
-            // Check if right textarea has changed
-            if (textareaContents.length >= 2) {
-                const rightText = textareaContents[1].value;
-                
-                if (rightText !== previousRightText && rightText !== text && rightText.length > 10) {
-                    result = rightText;
-                    console.log(`Got result after ${attempts} seconds`);
-                    break;
-                }
-                
-                previousRightText = rightText;
-            }
-            
-            attempts++;
-            
-            // Take periodic screenshots
-            if (attempts % 15 === 0) {
-                await page.screenshot({ path: `ghost-waiting-${attempts}-${Date.now()}.png`, fullPage: true });
-            }
-        }
-        
-        // Final attempt to get result
-        if (!result) {
-            console.log('Trying final extraction...');
-            
-            // Take final screenshot
-            await page.screenshot({ path: `ghost-final-${Date.now()}.png`, fullPage: true });
-            
-            // Get all text content from the page
-            const fullPageContent = await page.evaluate(() => {
-                const textareas = document.querySelectorAll('textarea');
+            // Check multiple possible locations for the humanized text
+            const allPossibleResults = await page.evaluate((originalText) => {
                 const results = [];
                 
-                textareas.forEach((ta, index) => {
-                    results.push({
-                        index,
-                        value: ta.value,
-                        placeholder: ta.placeholder,
-                        id: ta.id,
-                        name: ta.name
+                // Check all textareas
+                const textareas = document.querySelectorAll('textarea');
+                textareas.forEach((ta, i) => {
+                    if (ta.value && ta.value !== originalText && ta.value.length > 10) {
+                        results.push({
+                            type: 'textarea',
+                            index: i,
+                            content: ta.value,
+                            length: ta.value.length
+                        });
+                    }
+                });
+                
+                // Check all divs with significant text content
+                const divs = document.querySelectorAll('div');
+                divs.forEach((div, i) => {
+                    const text = div.textContent || div.innerText || '';
+                    if (text && text !== originalText && text.length > 50 && !text.includes('Humanize') && !text.includes('Light')) {
+                        results.push({
+                            type: 'div',
+                            index: i,
+                            content: text.trim(),
+                            length: text.length,
+                            classes: div.className
+                        });
+                    }
+                });
+                
+                // Check all pre elements
+                const pres = document.querySelectorAll('pre');
+                pres.forEach((pre, i) => {
+                    const text = pre.textContent || pre.innerText || '';
+                    if (text && text !== originalText && text.length > 10) {
+                        results.push({
+                            type: 'pre',
+                            index: i,
+                            content: text.trim(),
+                            length: text.length
+                        });
+                    }
+                });
+                
+                // Check for elements with specific classes that might contain results
+                const resultClasses = [
+                    '.result', '.output', '.humanized', 
+                    '.generated', '.response', '.answer'
+                ];
+                
+                resultClasses.forEach(className => {
+                    const elements = document.querySelectorAll(className);
+                    elements.forEach((el, i) => {
+                        const text = el.textContent || el.innerText || '';
+                        if (text && text !== originalText && text.length > 10) {
+                            results.push({
+                                type: 'class',
+                                selector: className,
+                                index: i,
+                                content: text.trim(),
+                                length: text.length
+                            });
+                        }
                     });
                 });
                 
                 return results;
+            }, text);
+            
+            console.log(`Attempt ${attempts}: Found ${allPossibleResults.length} potential results`);
+            
+            // Log details of found results
+            allPossibleResults.forEach((result, i) => {
+                console.log(`Result ${i}: ${result.type} - Length: ${result.length} - Preview: ${result.content.substring(0, 50)}...`);
             });
             
-            console.log('Final textarea contents:', fullPageContent);
+            // Pick the best result (longest, most likely to be humanized)
+            if (allPossibleResults.length > 0) {
+                const bestResult = allPossibleResults.reduce((prev, current) => {
+                    return (current.length > prev.length) ? current : prev;
+                });
+                
+                if (bestResult.content && bestResult.content !== text) {
+                    result = bestResult.content;
+                    console.log(`Found result in ${bestResult.type} after ${attempts} seconds`);
+                    break;
+                }
+            }
             
-            // Use the second textarea if it has different content
-            if (fullPageContent.length >= 2 && fullPageContent[1].value !== text) {
-                result = fullPageContent[1].value;
+            attempts++;
+            
+            // Log progress
+            if (attempts % 15 === 0) {
+                console.log(`Still waiting... attempt ${attempts}`);
+                // Take screenshot for debugging
+                await page.screenshot({ path: `ghost-debug-${attempts}-${Date.now()}.png`, fullPage: true });
             }
         }
         
