@@ -43,8 +43,8 @@ app.post('/result', async (req, res) => {
         
         console.log('Text to humanize:', textToHumanize);
         
-        // Humanize the text
-        const humanized = await humanizeText(textToHumanize.trim());
+        // Humanize with Ghost AI
+        const humanized = await humanizeWithGhostAI(textToHumanize.trim());
         
         // Display the result
         res.send(`
@@ -62,7 +62,7 @@ app.post('/result', async (req, res) => {
             <body>
                 <div class="container">
                     <h1>Thank You!</h1>
-                    <p>Your text has been humanized:</p>
+                    <p>Your text has been humanized with Ghost AI (Strong mode):</p>
                     <div class="original"><strong>Original:</strong><br>${textToHumanize}</div>
                     <div class="result"><strong>Humanized:</strong><br>${humanized}</div>
                 </div>
@@ -75,117 +75,175 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Humanize function with human-like behavior
-async function humanizeText(text) {
+// Ghost AI specific humanization function
+async function humanizeWithGhostAI(text) {
     let browser;
     try {
-        console.log('Starting humanization for:', text.substring(0, 50));
-        
-        // Random user agents to appear more human
-        const userAgents = [
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/119.0'
-        ];
-        
-        const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+        console.log('Starting humanization with Ghost AI');
         
         browser = await chromium.launch({ 
             headless: true,
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
-                '--disable-blink-features=AutomationControlled',
-                '--disable-dev-shm-usage',
-                '--disable-web-security',
-                '--disable-features=IsolateOrigins,site-per-process'
+                '--disable-blink-features=AutomationControlled'
             ]
         });
         
         const context = await browser.newContext({
-            userAgent: randomUA,
-            viewport: { width: 1366, height: 768 },
-            ignoreHTTPSErrors: true
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
         });
         
         const page = await context.newPage();
         
-        // Add stealth scripts
-        await page.addInitScript(() => {
-            Object.defineProperty(navigator, 'webdriver', {
-                get: () => undefined
-            });
-        });
-        
-        // Set random delays to appear human
-        const randomDelay = () => Math.floor(Math.random() * 1000) + 500;
-        
-        // Navigate with a real referrer
-        await page.goto('https://ai-text-humanizer.com/', {
-            waitUntil: 'domcontentloaded',
+        // Navigate to Ghost AI
+        await page.goto('https://www.the-ghost-ai.com/', {
+            waitUntil: 'networkidle',
             timeout: 30000
         });
         
-        // Random delay like a human would take
-        await page.waitForTimeout(randomDelay());
+        console.log('Loaded Ghost AI');
         
-        // Wait for elements to be ready
-        await page.waitForSelector('#textareaBefore', { timeout: 20000 });
-        console.log('Found input field');
+        // Wait for the page to be fully loaded
+        await page.waitForTimeout(3000);
         
-        // Simulate human typing with delays
-        await page.click('#textareaBefore');
-        await page.waitForTimeout(randomDelay());
+        // Find and fill the input textarea
+        // Adjust these selectors based on actual Ghost AI structure
+        const inputSelectors = [
+            'textarea[placeholder*="paste"]',
+            'textarea[placeholder*="text"]',
+            'textarea:first-of-type',
+            '#input-text',
+            '.input-area textarea'
+        ];
         
-        // Clear the field
-        await page.keyboard.down('Control');
-        await page.keyboard.press('a');
-        await page.keyboard.up('Control');
-        await page.waitForTimeout(300);
-        
-        // Type with human-like speed
-        for (const char of text) {
-            await page.keyboard.type(char);
-            await page.waitForTimeout(Math.random() * 50 + 10);
+        let inputFilled = false;
+        for (const selector of inputSelectors) {
+            try {
+                await page.waitForSelector(selector, { timeout: 5000 });
+                await page.fill(selector, text);
+                console.log(`Filled input with selector: ${selector}`);
+                inputFilled = true;
+                break;
+            } catch (e) {
+                continue;
+            }
         }
         
-        console.log('Filled input');
+        if (!inputFilled) {
+            throw new Error('Could not find input field');
+        }
         
-        // Wait before clicking
-        await page.waitForTimeout(randomDelay());
+        // Set to Strong mode if there's a dropdown or option
+        // Look for strength/mode selector
+        const strengthSelectors = [
+            'select[name*="strength"]',
+            'select[name*="mode"]',
+            '.strength-selector',
+            '#mode-selector',
+            'button:has-text("Strong")',
+            'label:has-text("Strong")'
+        ];
         
-        // Click the humanize button
-        await page.click('#btnGo');
-        console.log('Clicked button');
+        for (const selector of strengthSelectors) {
+            try {
+                const element = await page.$(selector);
+                if (element) {
+                    const tagName = await element.evaluate(el => el.tagName.toLowerCase());
+                    
+                    if (tagName === 'select') {
+                        await page.selectOption(selector, 'strong');
+                        console.log('Selected strong mode from dropdown');
+                    } else if (tagName === 'button' || tagName === 'label') {
+                        await page.click(selector);
+                        console.log('Clicked strong mode button');
+                    }
+                    break;
+                }
+            } catch (e) {
+                continue;
+            }
+        }
         
-        // Enhanced waiting strategy
+        // Find and click the humanize/process button
+        const buttonSelectors = [
+            'button:has-text("Humanize")',
+            'button:has-text("Process")',
+            'button:has-text("Generate")',
+            'button:has-text("Submit")',
+            'button[type="submit"]',
+            '.submit-btn',
+            '#humanize-btn',
+            '[type="button"]:has-text("Process")'
+        ];
+        
+        let buttonClicked = false;
+        for (const selector of buttonSelectors) {
+            try {
+                await page.click(selector);
+                console.log(`Clicked button with selector: ${selector}`);
+                buttonClicked = true;
+                break;
+            } catch (e) {
+                continue;
+            }
+        }
+        
+        if (!buttonClicked) {
+            // Try clicking any button that might be the submit button
+            const buttons = await page.$$('button[type="button"]');
+            for (const button of buttons) {
+                const text = await button.textContent();
+                if (text && (text.includes('Process') || text.includes('Humanize') || text.includes('Generate'))) {
+                    await button.click();
+                    console.log(`Clicked button with text: ${text}`);
+                    buttonClicked = true;
+                    break;
+                }
+            }
+        }
+        
+        if (!buttonClicked) {
+            throw new Error('Could not find submit button');
+        }
+        
+        // Wait for result with multiple attempts
         let result = '';
         let attempts = 0;
-        const maxAttempts = 60; // 60 seconds max
+        const maxAttempts = 40;
+        
+        const outputSelectors = [
+            'textarea[placeholder*="output"]',
+            'textarea:last-of-type',
+            '#output-text',
+            '.output-area textarea',
+            '.result-area',
+            '#result',
+            '.response-text'
+        ];
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check multiple selectors
-            result = await page.evaluate(() => {
-                // Try multiple methods to get the result
-                const textarea = document.querySelector('#textareaAfter');
-                if (textarea) {
-                    return textarea.value || textarea.textContent || textarea.innerText || '';
+            // Try to get the result from various selectors
+            for (const selector of outputSelectors) {
+                try {
+                    const element = await page.$(selector);
+                    if (element) {
+                        result = await element.evaluate(el => el.value || el.textContent || el.innerText || '');
+                        if (result && result.trim() !== '' && result !== text && result.length > 10) {
+                            console.log(`Got result with selector: ${selector}`);
+                            break;
+                        }
+                    }
+                } catch (e) {
+                    continue;
                 }
-                
-                // Alternative selectors in case the site changes
-                const altTextarea = document.querySelector('textarea:last-of-type');
-                if (altTextarea) {
-                    return altTextarea.value || altTextarea.textContent || '';
-                }
-                
-                return '';
-            });
+            }
             
             attempts++;
             
-            if (result && result.trim() !== '' && result !== text && result.length > 10) {
+            if (result && result.trim() !== '' && result !== text) {
                 console.log('Got result after', attempts, 'seconds');
                 break;
             }
@@ -196,32 +254,11 @@ async function humanizeText(text) {
             }
         }
         
-        // Try additional methods if still no result
-        if (!result || result === text) {
-            console.log('Trying additional methods');
-            
-            // Take screenshot for debugging
-            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
-            
-            // Check if there's any error message
-            const errorMessage = await page.evaluate(() => {
-                const errors = document.querySelectorAll('.error, .warning, .alert');
-                for (const error of errors) {
-                    if (error.textContent) return error.textContent;
-                }
-                return '';
-            });
-            
-            if (errorMessage) {
-                console.log('Error message:', errorMessage);
-            }
-        }
-        
         console.log('Final result:', result);
-        return result || 'The AI humanizer is currently unavailable. Please try again later.';
+        return result || 'Could not get result from Ghost AI';
         
     } catch (error) {
-        console.error('Error in humanizeText:', error);
+        console.error('Error with Ghost AI:', error);
         return `Error: ${error.message}`;
     } finally {
         if (browser) {
@@ -233,7 +270,7 @@ async function humanizeText(text) {
 // Direct API endpoint
 app.post('/humanize', async (req, res) => {
     try {
-        const humanized = await humanizeText(req.body.text);
+        const humanized = await humanizeWithGhostAI(req.body.text);
         res.json({ humanized });
     } catch (error) {
         res.status(500).json({ error: error.message });
