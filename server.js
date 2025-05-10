@@ -7,6 +7,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'healthy' }));
@@ -22,12 +23,58 @@ app.post('/jotform-webhook', async (req, res) => {
             if (typeof value === 'string') text += value + ' ';
         }
         
-        // Humanize text
-        const humanized = await humanizeText(text);
+        // Humanize text (this happens in background)
+        humanizeText(text).then(humanized => {
+            // Store or process the result
+            console.log('Humanized:', humanized);
+        });
         
-        res.json({ success: true, humanized });
+        // Respond immediately to JotForm
+        res.status(200).send('OK');
     } catch (error) {
         res.status(500).json({ error: error.message });
+    }
+});
+
+// Result display page - this receives form data directly from JotForm
+app.post('/result', async (req, res) => {
+    try {
+        // Extract text from the form submission
+        let text = '';
+        const submission = req.body;
+        
+        for (const [key, value] of Object.entries(submission)) {
+            if (typeof value === 'string') text += value + ' ';
+        }
+        
+        // Humanize the text
+        const humanized = await humanizeText(text);
+        
+        // Display the result
+        res.send(`
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Humanized Result</title>
+                <style>
+                    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
+                    .container { background: #f5f5f5; padding: 30px; border-radius: 10px; }
+                    .result { white-space: pre-wrap; background: white; padding: 20px; border-radius: 5px; margin-top: 20px; }
+                    .original { background: #f0f0f0; padding: 10px; margin-bottom: 20px; }
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Thank You!</h1>
+                    <p>Your text has been humanized:</p>
+                    <div class="original"><strong>Original:</strong><br>${text}</div>
+                    <div class="result"><strong>Humanized:</strong><br>${humanized}</div>
+                </div>
+            </body>
+            </html>
+        `);
+    } catch (error) {
+        res.status(500).send('Error processing your request');
     }
 });
 
