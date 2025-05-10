@@ -24,20 +24,17 @@ app.post('/jotform-webhook', async (req, res) => {
 // Result display page
 app.post('/result', async (req, res) => {
     try {
-        // Look for specific fields that contain the text to humanize
         const submission = req.body;
         let textToHumanize = '';
         
         console.log('Received submission:', submission);
         
-        // Try to find the main text field (adjust field names as needed)
+        // Try to find the main text field
         for (const [key, value] of Object.entries(submission)) {
-            // Skip email, name, phone fields
             if (key.includes('email') || key.includes('name') || key.includes('phone') || key.includes('address')) {
                 continue;
             }
             
-            // Check if this is a text field that's long enough
             if (typeof value === 'string' && value.length > 20) {
                 textToHumanize = value;
                 break;
@@ -46,16 +43,7 @@ app.post('/result', async (req, res) => {
         
         console.log('Text to humanize:', textToHumanize);
         
-        // If no specific field found, use all text combined (as fallback)
-        if (!textToHumanize) {
-            for (const [key, value] of Object.entries(submission)) {
-                if (typeof value === 'string' && !key.includes('email') && !key.includes('name')) {
-                    textToHumanize += value + ' ';
-                }
-            }
-        }
-        
-        // Humanize the text
+        // Humanize the text with longer timeout
         const humanized = await humanizeText(textToHumanize.trim());
         
         // Display the result
@@ -97,7 +85,7 @@ app.post('/humanize', async (req, res) => {
     }
 });
 
-// Humanize function using exact IDs with better timing and error handling
+// Enhanced humanize function with multiple strategies
 async function humanizeText(text) {
     let browser;
     try {
@@ -110,13 +98,17 @@ async function humanizeText(text) {
         
         const page = await browser.newPage();
         
+        // Set page timeout
+        page.setDefaultTimeout(60000);
+        
         // Wait for the page to load completely
         await page.goto('https://ai-text-humanizer.com/', {
-            waitUntil: 'networkidle'
+            waitUntil: 'networkidle',
+            timeout: 30000
         });
         
         // Wait for elements to be ready
-        await page.waitForSelector('#textareaBefore', { timeout: 15000 });
+        await page.waitForSelector('#textareaBefore', { timeout: 20000 });
         console.log('Found input field');
         
         // Clear and fill input textarea
@@ -124,41 +116,75 @@ async function humanizeText(text) {
         await page.fill('#textareaBefore', text);
         console.log('Filled input');
         
+        // Wait a bit before clicking
+        await page.waitForTimeout(2000);
+        
         // Click the humanize button
         await page.click('#btnGo');
         console.log('Clicked button');
         
-        // Wait and check for output with retries
+        // Wait and check for output with extended retries
         let result = '';
         let attempts = 0;
-        const maxAttempts = 20; // 20 seconds max
+        const maxAttempts = 45; // 45 seconds max
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
-            result = await page.inputValue('#textareaAfter');
-            attempts++;
             
-            if (result && result.trim() !== '' && result !== text) {
+            // Try multiple ways to get the result
+            result = await page.evaluate(() => {
+                const textarea = document.querySelector('#textareaAfter');
+                if (textarea) {
+                    // Check value first, then textContent
+                    return textarea.value || textarea.textContent || textarea.innerText || '';
+                }
+                return '';
+            });
+            
+            attempts++;
+            console.log(`Attempt ${attempts}, result length:`, result?.length || 0);
+            
+            // Check if we got a meaningful result
+            if (result && result.trim() !== '' && result !== text && result.length > 10) {
                 console.log('Got result after', attempts, 'seconds');
                 break;
             }
         }
         
-        if (!result || result === text) {
-            console.log('No new result found, trying alternative selector');
-            // Try getting text content instead of input value
-            result = await page.evaluate(() => {
-                const textarea = document.querySelector('#textareaAfter');
-                return textarea ? textarea.value || textarea.textContent : '';
+        // Final check with different approach
+        if (!result || result === text || result.trim() === '') {
+            console.log('Trying alternative approach');
+            
+            // Wait a bit more
+            await page.waitForTimeout(5000);
+            
+            // Try to detect if the button is still processing
+            const isProcessing = await page.evaluate(() => {
+                const button = document.querySelector('#btnGo');
+                return button ? button.disabled || button.classList.contains('loading') : false;
             });
+            
+            if (isProcessing) {
+                console.log('Still processing, waiting more...');
+                await page.waitForTimeout(10000);
+                
+                // Try one more time
+                result = await page.inputValue('#textareaAfter');
+            }
+        }
+        
+        // Final fallback - take screenshot for debugging
+        if (!result || result === text) {
+            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
+            console.log('Saved debug screenshot');
         }
         
         console.log('Final result:', result);
-        return result || 'Processing timed out. Please try again.';
+        return result || 'The AI humanizer is taking longer than expected. Please try again in a moment.';
         
     } catch (error) {
         console.error('Error in humanizeText:', error);
-        return `Error: ${error.message}`;
+        return `Error: ${error.message}. Please try again.`;
     } finally {
         if (browser) {
             try {
