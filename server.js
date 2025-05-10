@@ -75,11 +75,12 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Ghost AI specific humanization function
+// Ghost AI specific humanization function with detailed debugging
 async function humanizeWithGhostAI(text) {
     let browser;
     try {
         console.log('Starting humanization with Ghost AI');
+        console.log('Input text length:', text.length);
         
         browser = await chromium.launch({ 
             headless: true,
@@ -107,100 +108,143 @@ async function humanizeWithGhostAI(text) {
         // Wait for the page to be fully loaded
         await page.waitForTimeout(5000);
         
-        // Click the Strong button using proper Playwright selector
+        // Take initial screenshot
+        await page.screenshot({ path: `ghost-initial-${Date.now()}.png`, fullPage: true });
+        
+        // Click the Strong button
         await page.click('text=Strong');
         console.log('Selected Strong mode');
-        await page.waitForTimeout(1000);
+        await page.waitForTimeout(2000);
         
         // Find and fill the input textarea (left column)
         await page.waitForSelector('textarea', { timeout: 10000 });
         const textareas = await page.$$('textarea');
+        console.log('Found textareas:', textareas.length);
         
         if (textareas.length >= 1) {
+            // Clear the textarea first
             await textareas[0].click();
-            await textareas[0].fill(text);
+            await page.keyboard.down('Control');
+            await page.keyboard.press('a');
+            await page.keyboard.up('Control');
+            await page.keyboard.press('Delete');
+            await page.waitForTimeout(1000);
+            
+            // Type the text
+            await textareas[0].type(text);
             console.log('Filled input text');
+            
+            // Verify the text was entered
+            const inputValue = await textareas[0].evaluate(el => el.value);
+            console.log('Input value length after filling:', inputValue.length);
         } else {
             throw new Error('Could not find input textarea');
         }
         
+        // Take screenshot before clicking humanize
+        await page.screenshot({ path: `ghost-before-humanize-${Date.now()}.png`, fullPage: true });
+        
         // Click the Humanize button
         await page.click('text=Humanize');
         console.log('Clicked Humanize button');
+        await page.waitForTimeout(3000);
         
-        // Wait for the result to appear in the right column
+        // Monitor the processing
         let result = '';
         let attempts = 0;
         const maxAttempts = 60; // 60 seconds max
+        let previousRightText = '';
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check if processing is complete by looking at button state
-            const isProcessing = await page.evaluate(() => {
+            // Check button state
+            const buttonState = await page.evaluate(() => {
                 const buttons = document.querySelectorAll('button');
                 for (const button of buttons) {
                     if (button.textContent && button.textContent.includes('Humanize')) {
-                        return button.disabled;
+                        return {
+                            disabled: button.disabled,
+                            text: button.textContent,
+                            classes: button.className
+                        };
                     }
                 }
-                return false;
+                return { disabled: false, text: 'not found', classes: '' };
             });
             
-            if (!isProcessing) {
-                // Get the result from the right textarea
-                const rightTextarea = await page.evaluate(() => {
-                    const textareas = document.querySelectorAll('textarea');
-                    if (textareas.length >= 2) {
-                        return textareas[1].value || textareas[1].textContent || '';
-                    }
-                    return '';
-                });
+            console.log(`Attempt ${attempts}: Button state -`, buttonState);
+            
+            // Get content from both textareas
+            const textareaContents = await page.evaluate(() => {
+                const textareas = document.querySelectorAll('textarea');
+                return Array.from(textareas).map((ta, i) => ({
+                    index: i,
+                    value: ta.value,
+                    length: ta.value.length
+                }));
+            });
+            
+            console.log(`Attempt ${attempts}: Textareas -`, textareaContents);
+            
+            // Check if right textarea has changed
+            if (textareaContents.length >= 2) {
+                const rightText = textareaContents[1].value;
                 
-                if (rightTextarea && rightTextarea.trim() !== '' && rightTextarea !== text && rightTextarea.length > 10) {
-                    result = rightTextarea;
-                    console.log('Got result from right column');
+                if (rightText !== previousRightText && rightText !== text && rightText.length > 10) {
+                    result = rightText;
+                    console.log(`Got result after ${attempts} seconds`);
                     break;
                 }
+                
+                previousRightText = rightText;
             }
             
             attempts++;
             
-            // Log progress every 10 seconds
-            if (attempts % 10 === 0) {
-                console.log(`Still waiting... attempt ${attempts}`);
+            // Take periodic screenshots
+            if (attempts % 15 === 0) {
+                await page.screenshot({ path: `ghost-waiting-${attempts}-${Date.now()}.png`, fullPage: true });
             }
         }
         
-        // If still no result, try alternative methods
+        // Final attempt to get result
         if (!result) {
-            console.log('Trying alternative detection method');
+            console.log('Trying final extraction...');
             
-            // Take screenshot for debugging
-            await page.screenshot({ path: `debug-${Date.now()}.png`, fullPage: true });
+            // Take final screenshot
+            await page.screenshot({ path: `ghost-final-${Date.now()}.png`, fullPage: true });
             
-            // Try to get any text from the right side
-            result = await page.evaluate(() => {
-                // Look for the right column container
+            // Get all text content from the page
+            const fullPageContent = await page.evaluate(() => {
                 const textareas = document.querySelectorAll('textarea');
-                if (textareas.length >= 2) {
-                    return textareas[1].value || '';
-                }
+                const results = [];
                 
-                // Try alternative methods
-                const containers = document.querySelectorAll('div');
-                for (const container of containers) {
-                    const textarea = container.querySelector('textarea');
-                    if (textarea && textarea.value && textarea.value.length > 50) {
-                        return textarea.value;
-                    }
-                }
-                return '';
+                textareas.forEach((ta, index) => {
+                    results.push({
+                        index,
+                        value: ta.value,
+                        placeholder: ta.placeholder,
+                        id: ta.id,
+                        name: ta.name
+                    });
+                });
+                
+                return results;
             });
+            
+            console.log('Final textarea contents:', fullPageContent);
+            
+            // Use the second textarea if it has different content
+            if (fullPageContent.length >= 2 && fullPageContent[1].value !== text) {
+                result = fullPageContent[1].value;
+            }
         }
         
         console.log('Final result length:', result?.length || 0);
-        return result || 'Could not get result from Ghost AI';
+        console.log('Final result preview:', result?.substring(0, 100) || 'No result');
+        
+        return result || 'Could not get humanized result from Ghost AI';
         
     } catch (error) {
         console.error('Error with Ghost AI:', error);
