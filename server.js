@@ -43,8 +43,8 @@ app.post('/result', async (req, res) => {
         
         console.log('Text to humanize:', textToHumanize);
         
-        // Humanize with Ghost AI
-        const humanized = await humanizeWithGhostAI(textToHumanize.trim());
+        // Humanize with Undetectable AI
+        const humanized = await humanizeWithUndetectableAI(textToHumanize.trim());
         
         // Display the result
         res.send(`
@@ -62,7 +62,7 @@ app.post('/result', async (req, res) => {
             <body>
                 <div class="container">
                     <h1>Thank You!</h1>
-                    <p>Your text has been humanized with Ghost AI (Strong mode):</p>
+                    <p>Your text has been humanized with Undetectable AI:</p>
                     <div class="original"><strong>Original:</strong><br>${textToHumanize}</div>
                     <div class="result"><strong>Humanized:</strong><br>${humanized}</div>
                 </div>
@@ -75,11 +75,11 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Ghost AI humanization function
-async function humanizeWithGhostAI(text) {
+// Undetectable AI humanization function
+async function humanizeWithUndetectableAI(text) {
     let browser;
     try {
-        console.log('Starting humanization with Ghost AI');
+        console.log('Starting humanization with Undetectable AI');
         
         browser = await chromium.launch({ 
             headless: true,
@@ -96,32 +96,27 @@ async function humanizeWithGhostAI(text) {
         
         const page = await context.newPage();
         
-        // Navigate to Ghost AI
-        await page.goto('https://www.the-ghost-ai.com/', {
+        // Navigate to Undetectable AI
+        await page.goto('https://www.undetectableai.pro/', {
             waitUntil: 'networkidle',
             timeout: 30000
         });
         
-        console.log('Loaded Ghost AI');
+        console.log('Loaded Undetectable AI');
         
         // Wait for the page to be fully loaded
         await page.waitForTimeout(5000);
         
-        // Click the Strong button
-        await page.click('text=Strong');
-        console.log('Selected Strong mode');
-        await page.waitForTimeout(2000);
-        
-        // Fill the left textarea
-        const leftTextarea = await page.locator('textarea').first();
-        await leftTextarea.fill(text);
+        // Fill the input textarea using the specific selector
+        const inputTextarea = await page.locator('textarea.Home_editor__textarea__W6jTe').first();
+        await inputTextarea.fill(text);
         console.log('Filled input text');
         
         // Click the Humanize button
-        await page.click('text=Humanize');
+        await page.click('button.Home_editor__button__iu08P');
         console.log('Clicked Humanize button');
         
-        // Wait and monitor multiple possible locations for the result
+        // Wait for the result textarea to populate
         let result = '';
         let attempts = 0;
         const maxAttempts = 60;
@@ -129,114 +124,72 @@ async function humanizeWithGhostAI(text) {
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check multiple possible locations
-            const currentResult = await page.evaluate((originalText) => {
-                // Check all textareas
-                const textareas = document.querySelectorAll('textarea');
-                for (let i = 1; i < textareas.length; i++) { // Start from index 1 to skip input textarea
-                    const ta = textareas[i];
-                    if (ta.value && ta.value !== originalText && ta.value.length > 50) {
-                        return { source: 'textarea', content: ta.value.trim() };
+            // Check the result textarea using the specific selector
+            const resultText = await page.evaluate((originalText) => {
+                // Get the result textarea with the combined classes
+                const resultTextarea = document.querySelector('textarea.Home_editor__textarea__W6jTe.Home_editor__result__GpHzx');
+                
+                if (resultTextarea && resultTextarea.value) {
+                    const content = resultTextarea.value.trim();
+                    // Make sure it's not the same as original and not a placeholder
+                    if (content && content !== originalText && content !== 'Enter text here' && content.length > 10) {
+                        return content;
                     }
                 }
                 
-                // Check the specific span
-                const span = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60 span.text-gray-600');
-                if (span && span.textContent !== 'Your humanized text will appear here.' && span.textContent.length > 50) {
-                    return { source: 'span', content: span.textContent.trim() };
-                }
-                
-                // Check the parent div of the span
-                const parentDiv = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60');
-                if (parentDiv) {
-                    const divText = parentDiv.textContent || '';
-                    const cleanText = divText.replace('Your humanized text will appear here.', '').trim();
-                    if (cleanText && cleanText !== originalText && cleanText.length > 50) {
-                        return { source: 'parentDiv', content: cleanText };
-                    }
-                }
-                
-                // Check any element with substantial text that's different from original
-                const allElements = document.querySelectorAll('div, p, span');
-                for (const el of allElements) {
-                    const text = el.textContent || '';
-                    if (text && 
-                        text !== originalText && 
-                        text.length > 100 && 
-                        !text.includes('Your humanized text will appear here') &&
-                        !text.includes('Light') &&
-                        !text.includes('Medium') &&
-                        !text.includes('Strong') &&
-                        !text.includes('Humanize') &&
-                        !text.includes('Type your text here')) {
-                        
-                        // Extra check to see if it's in the right column area
-                        const elementRect = el.getBoundingClientRect();
-                        if (elementRect.left > window.innerWidth / 2) {
-                            return { source: 'rightColumn', content: text.trim() };
-                        }
-                    }
-                }
-                
-                return { source: 'none', content: '' };
+                return '';
             }, text);
             
-            console.log(`Attempt ${attempts}: Found ${currentResult.source} with ${currentResult.content.length} chars`);
+            console.log(`Attempt ${attempts}: Found ${resultText.length} characters`);
             
-            if (currentResult.content && currentResult.content.length > 50) {
-                result = currentResult.content;
-                console.log(`Found result from ${currentResult.source} after ${attempts} seconds`);
+            if (resultText && resultText.length > 10) {
+                result = resultText;
+                console.log(`Found result after ${attempts} seconds`);
+                console.log(`Preview: ${result.substring(0, 100)}...`);
                 break;
             }
             
             attempts++;
             
-            // Take screenshot every 20 attempts
+            // Take screenshot every 20 seconds for debugging
             if (attempts % 20 === 0) {
-                await page.screenshot({ path: `ghost-debug-${attempts}.png`, fullPage: true });
+                await page.screenshot({ path: `undetectable-debug-${attempts}.png`, fullPage: true });
             }
         }
         
-        // If still no result, try waiting for changes more specifically
+        // If still no result, try final extraction
         if (!result) {
             console.log('No result found, trying final extraction...');
             
-            // Take a final screenshot
-            await page.screenshot({ path: `ghost-final.png`, fullPage: true });
+            // Wait a bit more for any async processing
+            await page.waitForTimeout(5000);
             
-            // Try one more comprehensive search
+            // Final attempt to get the result
             result = await page.evaluate(() => {
-                // Get ALL text from the right side
-                const rightContainer = document.querySelector('.grid > div:last-child');
-                if (rightContainer) {
-                    // Get all text nodes
-                    const walker = document.createTreeWalker(rightContainer, NodeFilter.SHOW_TEXT);
-                    let node;
-                    let allText = '';
-                    
-                    while (node = walker.nextNode()) {
-                        const text = node.textContent.trim();
-                        if (text && 
-                            !text.includes('Your humanized text will appear here') &&
-                            !text.includes('Words') &&
-                            text.length > 10) {
-                            allText += text + ' ';
-                        }
-                    }
-                    
-                    return allText.trim();
+                // Try the specific selector first
+                const resultTextarea = document.querySelector('textarea.Home_editor__textarea__W6jTe.Home_editor__result__GpHzx');
+                if (resultTextarea && resultTextarea.value && resultTextarea.value.trim()) {
+                    return resultTextarea.value.trim();
                 }
+                
+                // Try any textarea that might contain the result
+                const allTextareas = document.querySelectorAll('textarea');
+                for (const ta of allTextareas) {
+                    if (ta.value && ta.value.length > 50 && !ta.classList.contains('Home_editor__textarea__W6jTe')) {
+                        return ta.value.trim();
+                    }
+                }
+                
                 return '';
             });
         }
         
         console.log('Final result length:', result?.length || 0);
-        console.log('Final result preview:', result?.substring(0, 200) || 'No result');
         
-        return result || 'Ghost AI processing completed but no humanized text was detected. This might be a temporary issue with the service.';
+        return result || 'Undetectable AI processing completed but no humanized text was returned. Please try again.';
         
     } catch (error) {
-        console.error('Error with Ghost AI:', error.message);
+        console.error('Error with Undetectable AI:', error.message);
         return `Error: ${error.message}`;
     } finally {
         if (browser) {
@@ -248,7 +201,7 @@ async function humanizeWithGhostAI(text) {
 // Direct API endpoint
 app.post('/humanize', async (req, res) => {
     try {
-        const humanized = await humanizeWithGhostAI(req.body.text);
+        const humanized = await humanizeWithUndetectableAI(req.body.text);
         res.json({ humanized });
     } catch (error) {
         res.status(500).json({ error: error.message });
