@@ -56,6 +56,7 @@ app.post('/result', async (req, res) => {
     }
 });
 
+// Rewritify automation core
 async function humanizeWithRewritifyAI(text) {
     const browser = await chromium.launch({
         headless: true,
@@ -68,7 +69,7 @@ async function humanizeWithRewritifyAI(text) {
         console.log("🌐 Opening Rewritify...");
         await page.goto('https://rewritify.ai/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        await page.waitForTimeout(2000); // buffer for hydration
+        await page.waitForTimeout(2000);
         await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 30000 });
 
         console.log("✏️ Filling input...");
@@ -79,15 +80,25 @@ async function humanizeWithRewritifyAI(text) {
         await page.click('button:has-text("Humanize")');
         await page.waitForTimeout(8000);
 
+        // 🔍 Extract best humanized output
         let result = '';
         for (let i = 0; i < 15; i++) {
             await page.waitForTimeout(1000);
-            result = await page.evaluate(() => {
-                const el = document.querySelector(
-                    '#outputView div.tiptap.ProseMirror[contenteditable="false"]'
-                );
-                return el?.innerText?.trim() || '';
-            });
+            result = await page.evaluate((inputText) => {
+                const blocks = Array.from(document.querySelectorAll('div.tiptap.ProseMirror[contenteditable="false"]'));
+
+                let best = '';
+                for (const block of blocks) {
+                    const text = block.innerText?.trim();
+                    if (!text) continue;
+                    if (text.length > best.length && text !== inputText && text.length > 50) {
+                        best = text;
+                    }
+                }
+
+                return best;
+            }, text);
+
             if (result.length > 50) break;
         }
 
