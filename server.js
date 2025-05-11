@@ -112,23 +112,17 @@ async function humanizeWithGhostAI(text) {
         console.log('Selected Strong mode');
         await page.waitForTimeout(2000);
         
-        // Find and fill the input textarea (left column)
-        await page.waitForSelector('textarea', { timeout: 10000 });
-        const textareas = await page.$$('textarea');
-        
-        if (textareas.length >= 1) {
-            await textareas[0].click();
-            await textareas[0].fill(text);
-            console.log('Filled input text');
-        } else {
-            throw new Error('Could not find input textarea');
-        }
+        // Find the input textarea and fill it
+        const leftTextarea = await page.locator('textarea').first();
+        await leftTextarea.click();
+        await leftTextarea.fill(text);
+        console.log('Filled input text');
         
         // Click the Humanize button
-        await page.click('text=Humanize');
+        await page.click('button:has-text("Humanize")');
         console.log('Clicked Humanize button');
         
-        // Wait for processing and check multiple locations for result
+        // Wait for the result to appear in the right div
         let result = '';
         let attempts = 0;
         const maxAttempts = 60;
@@ -136,111 +130,104 @@ async function humanizeWithGhostAI(text) {
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check multiple possible locations for the humanized text
-            const allPossibleResults = await page.evaluate((originalText) => {
-                const results = [];
+            // Check the right side div for the humanized result
+            const rightDivContent = await page.evaluate(() => {
+                // Look for the right side container
+                const rightContainers = document.querySelectorAll('div');
                 
-                // Check all textareas
-                const textareas = document.querySelectorAll('textarea');
-                textareas.forEach((ta, i) => {
-                    if (ta.value && ta.value !== originalText && ta.value.length > 10) {
-                        results.push({
-                            type: 'textarea',
-                            index: i,
-                            content: ta.value,
-                            length: ta.value.length
-                        });
+                for (const container of rightContainers) {
+                    const text = container.textContent || '';
+                    
+                    // Skip the placeholder text
+                    if (text.includes('Your humanized text will appear here')) {
+                        continue;
                     }
-                });
-                
-                // Check all divs with significant text content
-                const divs = document.querySelectorAll('div');
-                divs.forEach((div, i) => {
-                    const text = div.textContent || div.innerText || '';
-                    if (text && text !== originalText && text.length > 50 && !text.includes('Humanize') && !text.includes('Light')) {
-                        results.push({
-                            type: 'div',
-                            index: i,
-                            content: text.trim(),
-                            length: text.length,
-                            classes: div.className
-                        });
-                    }
-                });
-                
-                // Check all pre elements
-                const pres = document.querySelectorAll('pre');
-                pres.forEach((pre, i) => {
-                    const text = pre.textContent || pre.innerText || '';
-                    if (text && text !== originalText && text.length > 10) {
-                        results.push({
-                            type: 'pre',
-                            index: i,
-                            content: text.trim(),
-                            length: text.length
-                        });
-                    }
-                });
-                
-                // Check for elements with specific classes that might contain results
-                const resultClasses = [
-                    '.result', '.output', '.humanized', 
-                    '.generated', '.response', '.answer'
-                ];
-                
-                resultClasses.forEach(className => {
-                    const elements = document.querySelectorAll(className);
-                    elements.forEach((el, i) => {
-                        const text = el.textContent || el.innerText || '';
-                        if (text && text !== originalText && text.length > 10) {
-                            results.push({
-                                type: 'class',
-                                selector: className,
-                                index: i,
-                                content: text.trim(),
-                                length: text.length
-                            });
+                    
+                    // Look for the actual result div
+                    if (text.length > 50 && 
+                        !text.includes('AI Humanizer') && 
+                        !text.includes('Bypass AI Detection') &&
+                        !text.includes('Type your text here') &&
+                        !text.includes('Words') &&
+                        !text.includes('Humanize') &&
+                        !text.includes('Light') &&
+                        !text.includes('Medium') &&
+                        !text.includes('Strong')) {
+                        
+                        // Check if this div is in the right column (has specific parent structure)
+                        const parent = container.parentElement;
+                        const grandParent = parent?.parentElement;
+                        
+                        // Look for the right side based on DOM structure
+                        if (grandParent?.className?.includes('grid') || 
+                            grandParent?.className?.includes('col') ||
+                            container.style?.background?.includes('purple') ||
+                            container.className?.includes('result')) {
+                            
+                            return text.trim();
                         }
-                    });
-                });
-                
-                return results;
-            }, text);
-            
-            console.log(`Attempt ${attempts}: Found ${allPossibleResults.length} potential results`);
-            
-            // Log details of found results
-            allPossibleResults.forEach((result, i) => {
-                console.log(`Result ${i}: ${result.type} - Length: ${result.length} - Preview: ${result.content.substring(0, 50)}...`);
+                    }
+                }
+                return '';
             });
             
-            // Pick the best result (longest, most likely to be humanized)
-            if (allPossibleResults.length > 0) {
-                const bestResult = allPossibleResults.reduce((prev, current) => {
-                    return (current.length > prev.length) ? current : prev;
-                });
-                
-                if (bestResult.content && bestResult.content !== text) {
-                    result = bestResult.content;
-                    console.log(`Found result in ${bestResult.type} after ${attempts} seconds`);
-                    break;
-                }
+            console.log(`Attempt ${attempts}: Right div content length = ${rightDivContent.length}`);
+            
+            if (rightDivContent && rightDivContent.length > 10) {
+                result = rightDivContent;
+                console.log(`Found result after ${attempts} seconds`);
+                break;
             }
             
             attempts++;
             
-            // Log progress
+            // Take screenshot every 15 seconds for debugging
             if (attempts % 15 === 0) {
-                console.log(`Still waiting... attempt ${attempts}`);
-                // Take screenshot for debugging
-                await page.screenshot({ path: `ghost-debug-${attempts}-${Date.now()}.png`, fullPage: true });
+                await page.screenshot({ path: `ghost-debug-${attempts}.png`, fullPage: true });
             }
+        }
+        
+        // If still no result, wait for button to be enabled and try once more
+        if (!result) {
+            console.log('No result yet, waiting for processing to complete...');
+            
+            // Wait for the Humanize button to be enabled again (processing complete)
+            await page.waitForSelector('button:has-text("Humanize"):not([disabled])', { timeout: 30000 });
+            console.log('Processing complete, getting final result...');
+            
+            // Get the final result
+            result = await page.evaluate(() => {
+                // Find any div that looks like it contains the humanized result
+                const allDivs = document.querySelectorAll('div');
+                
+                for (const div of allDivs) {
+                    const text = div.textContent?.trim() || '';
+                    
+                    // Look for substantial text content that's not UI elements
+                    if (text.length > 100 && 
+                        !text.includes('Humanize') && 
+                        !text.includes('Light') && 
+                        !text.includes('Medium') && 
+                        !text.includes('Strong') &&
+                        !text.includes('Type your text here') &&
+                        !text.includes('Your humanized text will appear here') &&
+                        !text.includes('Bypass AI Detection')) {
+                        
+                        // Check if this is likely the result based on styling
+                        const styles = getComputedStyle(div);
+                        if (styles.padding || styles.margin || div.className) {
+                            return text;
+                        }
+                    }
+                }
+                return '';
+            });
         }
         
         console.log('Final result length:', result?.length || 0);
         console.log('Final result preview:', result?.substring(0, 100) || 'No result');
         
-        return result || 'Could not get humanized result from Ghost AI';
+        return result || 'Could not retrieve humanized text. Please try again.';
         
     } catch (error) {
         console.error('Error with Ghost AI:', error);
