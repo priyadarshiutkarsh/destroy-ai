@@ -12,7 +12,7 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
-// JotForm result handler
+// Result display route
 app.post('/result', async (req, res) => {
     try {
         const submission = req.body;
@@ -56,7 +56,6 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Rewritify automation
 async function humanizeWithRewritifyAI(text) {
     const browser = await chromium.launch({
         headless: true,
@@ -66,10 +65,12 @@ async function humanizeWithRewritifyAI(text) {
     const page = await browser.newPage();
 
     try {
-        console.log("🌐 Launching Rewritify...");
+        console.log("🌐 Opening Rewritify...");
         await page.goto('https://rewritify.ai/', { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 10000 });
+        await page.waitForTimeout(2000); // buffer for hydration
+        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 30000 });
+
         console.log("✏️ Filling input...");
         await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', text);
         await page.waitForTimeout(1000);
