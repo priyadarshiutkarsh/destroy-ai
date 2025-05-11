@@ -119,10 +119,10 @@ async function humanizeWithGhostAI(text) {
         console.log('Filled input text');
         
         // Click the Humanize button
-        await page.click('button:has-text("Humanize")');
+        await page.click('text=Humanize');
         console.log('Clicked Humanize button');
         
-        // Wait for processing and ignore UI elements
+        // Wait for processing - check for text changes in the right column
         let result = '';
         let attempts = 0;
         const maxAttempts = 60;
@@ -130,56 +130,55 @@ async function humanizeWithGhostAI(text) {
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Look for content but skip UI elements
-            const humanizedContent = await page.evaluate((originalText) => {
-                // Get the right side div container
-                const gridContainers = document.querySelectorAll('.grid > div');
+            // Look for content changes in the right side
+            const humanizedContent = await page.evaluate(() => {
+                // Find the span with class="text-gray-600" which typically shows "Your humanized text will appear here."
+                const rightSpans = document.querySelectorAll('.text-gray-600');
                 
-                if (gridContainers.length > 1) {
-                    const rightSide = gridContainers[1];
+                for (const span of rightSpans) {
+                    const parent = span.parentElement;
                     
-                    // Find all text in the right side
-                    const walker = document.createTreeWalker(rightSide, NodeFilter.SHOW_TEXT);
-                    let node;
-                    let collectedText = '';
-                    
-                    while (node = walker.nextNode()) {
-                        const text = node.textContent?.trim() || '';
-                        if (text && 
-                            text !== 'Your humanized text will appear here.' &&
-                            !text.includes('Verify & Use') &&
-                            !text.includes('Review and confirm') &&
-                            !text.includes('ensuring undetectable') &&
-                            !text.includes('AI humanized text') &&
-                            !text.includes('Words') &&
-                            text.length > 20) {
-                            
-                            // Check if this is actual content, not UI
-                            const parent = node.parentElement;
-                            if (!parent.tagName.match(/^(BUTTON|LABEL|A|SPAN)$/i) ||
-                                parent.className.includes('content')) {
-                                collectedText += text + ' ';
-                            }
-                        }
+                    // Check if the span text has changed from the placeholder
+                    if (span.textContent && 
+                        !span.textContent.includes('Your humanized text will appear here') &&
+                        span.textContent.length > 50) {
+                        return span.textContent.trim();
                     }
                     
-                    // Clean up the collected text
-                    collectedText = collectedText.trim();
+                    // Also check if the parent has text content (in case span is just a wrapper)
+                    if (parent && parent.textContent && 
+                        !parent.textContent.includes('Your humanized text will appear here') &&
+                        !parent.textContent.includes('Type your text here') &&
+                        parent.textContent.length > 50) {
+                        return parent.textContent.trim();
+                    }
+                }
+                
+                // Alternative approach: look for any div in the right column with substantial content
+                const gridContainers = document.querySelectorAll('.grid > div');
+                if (gridContainers.length > 1) {
+                    const rightContainer = gridContainers[1];
                     
-                    // Validate it's not the original and not empty
-                    if (collectedText && 
-                        collectedText !== originalText && 
-                        collectedText.length > 50) {
-                        return collectedText;
+                    // Check all divs in the right container
+                    const divs = rightContainer.querySelectorAll('div');
+                    for (const div of divs) {
+                        const text = div.textContent?.trim() || '';
+                        if (text.length > 100 && 
+                            !text.includes('Your humanized text will appear here') &&
+                            !text.includes('Type your text here') &&
+                            !text.includes('Verify & Use') &&
+                            !text.includes('Review and confirm')) {
+                            return text;
+                        }
                     }
                 }
                 
                 return '';
-            }, text);
+            });
             
             console.log(`Attempt ${attempts}: Found content length = ${humanizedContent.length}`);
             
-            if (humanizedContent) {
+            if (humanizedContent && humanizedContent.length > 50) {
                 result = humanizedContent;
                 console.log(`Found result after ${attempts} seconds`);
                 console.log(`Preview: ${result.substring(0, 100)}...`);
@@ -187,52 +186,72 @@ async function humanizeWithGhostAI(text) {
             }
             
             attempts++;
-            
-            // Take screenshot every 20 seconds for debugging
-            if (attempts % 20 === 0) {
-                await page.screenshot({ path: `ghost-wait-${attempts}.png`, fullPage: true });
-            }
         }
         
-        // If still no result, wait for button to be enabled and try final extraction
+        // If still no result, wait for button state change and do final check
         if (!result) {
-            console.log('No result yet, waiting for processing to complete...');
+            console.log('No result yet, checking button state...');
             
-            // Wait for button to not be disabled
-            await page.waitForFunction(() => {
-                const button = document.querySelector('button:has-text("Humanize")');
-                return button && !button.disabled;
-            }, { timeout: 30000 });
+            // Check if button is disabled (processing) or enabled (done)
+            const buttonState = await page.evaluate(() => {
+                const button = document.querySelector('button');
+                if (button && button.textContent.includes('Humanize')) {
+                    return {
+                        disabled: button.disabled,
+                        text: button.textContent
+                    };
+                }
+                return null;
+            });
             
-            console.log('Processing complete, extracting final result...');
+            console.log('Button state:', buttonState);
+            
+            // Wait for button to be enabled (processing complete)
+            if (buttonState && buttonState.disabled) {
+                console.log('Waiting for processing to complete...');
+                
+                await page.evaluate(() => {
+                    return new Promise((resolve) => {
+                        const checkButton = () => {
+                            const button = document.querySelector('button');
+                            if (button && button.textContent.includes('Humanize') && !button.disabled) {
+                                resolve();
+                            } else {
+                                setTimeout(checkButton, 1000);
+                            }
+                        };
+                        checkButton();
+                    });
+                });
+                
+                console.log('Processing complete, getting final result...');
+            }
             
             // Final extraction attempt
             result = await page.evaluate(() => {
-                // Look in the right column for the actual humanized text
-                const rightSides = document.querySelectorAll('.grid > div');
+                // Look for any substantial text in the right column
+                const rightContainers = document.querySelectorAll('.grid > div');
                 
-                if (rightSides.length > 1) {
-                    const rightContent = rightSides[1];
+                if (rightContainers.length > 1) {
+                    const rightSide = rightContainers[1];
                     
-                    // Look for divs that contain substantial text
-                    const divs = rightContent.querySelectorAll('div');
-                    for (const div of divs) {
-                        const text = div.textContent?.trim() || '';
-                        
-                        if (text.length > 100 && 
+                    // Get all text nodes
+                    const walker = document.createTreeWalker(rightSide, NodeFilter.SHOW_TEXT);
+                    let node;
+                    let combinedText = '';
+                    
+                    while (node = walker.nextNode()) {
+                        const text = node.textContent?.trim() || '';
+                        if (text && 
+                            !text.includes('Your humanized text will appear here') &&
+                            !text.includes('Type your text') &&
                             !text.includes('Verify & Use') &&
-                            !text.includes('Your humanized text') &&
-                            !text.includes('Review and confirm') &&
-                            !text.includes('AI humanized') &&
-                            !text.includes('Words')) {
-                            
-                            // Check if this div has a background (likely the result container)
-                            const styles = getComputedStyle(div);
-                            if (styles.background || styles.backgroundColor !== 'rgba(0, 0, 0, 0)') {
-                                return text;
-                            }
+                            text.length > 10) {
+                            combinedText += text + ' ';
                         }
                     }
+                    
+                    return combinedText.trim();
                 }
                 
                 return '';
@@ -242,10 +261,10 @@ async function humanizeWithGhostAI(text) {
         console.log('Final result length:', result?.length || 0);
         console.log('Final result preview:', result?.substring(0, 200) || 'No result');
         
-        return result || 'Processing completed but could not extract humanized text. Please try again.';
+        return result || 'Could not retrieve humanized text. Ghost AI may be experiencing issues.';
         
     } catch (error) {
-        console.error('Error with Ghost AI:', error);
+        console.error('Error with Ghost AI:', error.message);
         return `Error: ${error.message}`;
     } finally {
         if (browser) {
