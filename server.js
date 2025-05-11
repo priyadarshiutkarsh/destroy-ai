@@ -75,7 +75,7 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Ghost AI specific humanization function
+// Ghost AI humanization function
 async function humanizeWithGhostAI(text) {
     let browser;
     try {
@@ -112,9 +112,8 @@ async function humanizeWithGhostAI(text) {
         console.log('Selected Strong mode');
         await page.waitForTimeout(2000);
         
-        // Find the input textarea and fill it
+        // Fill the left textarea
         const leftTextarea = await page.locator('textarea').first();
-        await leftTextarea.click();
         await leftTextarea.fill(text);
         console.log('Filled input text');
         
@@ -122,7 +121,7 @@ async function humanizeWithGhostAI(text) {
         await page.click('text=Humanize');
         console.log('Clicked Humanize button');
         
-        // Wait for result - monitor changes to the output span
+        // Wait and monitor multiple possible locations for the result
         let result = '';
         let attempts = 0;
         const maxAttempts = 60;
@@ -130,85 +129,102 @@ async function humanizeWithGhostAI(text) {
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check the specific output span that contains the result
-            const humanizedContent = await page.evaluate((originalText) => {
-                // Find the span with text-gray-600 class in the output area
-                const outputDiv = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60');
-                
-                if (outputDiv) {
-                    const span = outputDiv.querySelector('span.text-gray-600');
-                    
-                    if (span) {
-                        const text = span.textContent || '';
-                        const cleanText = text.trim();
-                        
-                        // Check if the text has changed from the placeholder
-                        if (cleanText && 
-                            cleanText !== 'Your humanized text will appear here.' &&
-                            cleanText !== originalText &&
-                            cleanText.length > 50) {
-                            
-                            return cleanText;
-                        }
-                    }
-                    
-                    // Also check if there's any other content in the output div
-                    const divText = outputDiv.textContent || '';
-                    const cleanDivText = divText.trim();
-                    
-                    if (cleanDivText && 
-                        !cleanDivText.includes('Your humanized text will appear here') &&
-                        cleanDivText !== originalText &&
-                        cleanDivText.length > 50) {
-                        
-                        return cleanDivText;
+            // Check multiple possible locations
+            const currentResult = await page.evaluate((originalText) => {
+                // Check all textareas
+                const textareas = document.querySelectorAll('textarea');
+                for (let i = 1; i < textareas.length; i++) { // Start from index 1 to skip input textarea
+                    const ta = textareas[i];
+                    if (ta.value && ta.value !== originalText && ta.value.length > 50) {
+                        return { source: 'textarea', content: ta.value.trim() };
                     }
                 }
                 
-                return '';
+                // Check the specific span
+                const span = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60 span.text-gray-600');
+                if (span && span.textContent !== 'Your humanized text will appear here.' && span.textContent.length > 50) {
+                    return { source: 'span', content: span.textContent.trim() };
+                }
+                
+                // Check the parent div of the span
+                const parentDiv = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60');
+                if (parentDiv) {
+                    const divText = parentDiv.textContent || '';
+                    const cleanText = divText.replace('Your humanized text will appear here.', '').trim();
+                    if (cleanText && cleanText !== originalText && cleanText.length > 50) {
+                        return { source: 'parentDiv', content: cleanText };
+                    }
+                }
+                
+                // Check any element with substantial text that's different from original
+                const allElements = document.querySelectorAll('div, p, span');
+                for (const el of allElements) {
+                    const text = el.textContent || '';
+                    if (text && 
+                        text !== originalText && 
+                        text.length > 100 && 
+                        !text.includes('Your humanized text will appear here') &&
+                        !text.includes('Light') &&
+                        !text.includes('Medium') &&
+                        !text.includes('Strong') &&
+                        !text.includes('Humanize') &&
+                        !text.includes('Type your text here')) {
+                        
+                        // Extra check to see if it's in the right column area
+                        const elementRect = el.getBoundingClientRect();
+                        if (elementRect.left > window.innerWidth / 2) {
+                            return { source: 'rightColumn', content: text.trim() };
+                        }
+                    }
+                }
+                
+                return { source: 'none', content: '' };
             }, text);
             
-            console.log(`Attempt ${attempts}: Found content length = ${humanizedContent.length}`);
+            console.log(`Attempt ${attempts}: Found ${currentResult.source} with ${currentResult.content.length} chars`);
             
-            if (humanizedContent && humanizedContent.length > 50) {
-                result = humanizedContent;
-                console.log(`Found result after ${attempts} seconds`);
-                console.log(`Preview: ${result.substring(0, 100)}...`);
+            if (currentResult.content && currentResult.content.length > 50) {
+                result = currentResult.content;
+                console.log(`Found result from ${currentResult.source} after ${attempts} seconds`);
                 break;
             }
             
             attempts++;
             
-            // Take screenshot for debugging every 20 seconds
+            // Take screenshot every 20 attempts
             if (attempts % 20 === 0) {
                 await page.screenshot({ path: `ghost-debug-${attempts}.png`, fullPage: true });
             }
         }
         
-        // If still no result, try waiting for a visual change in the output area
+        // If still no result, try waiting for changes more specifically
         if (!result) {
-            console.log('Waiting for DOM changes in output area...');
+            console.log('No result found, trying final extraction...');
             
-            // Wait for the span content to change
-            await page.waitForFunction(() => {
-                const span = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60 span.text-gray-600');
-                return span && span.textContent !== 'Your humanized text will appear here.';
-            }, { timeout: 30000 })
-            .catch(() => console.log('Timeout waiting for content change'));
+            // Take a final screenshot
+            await page.screenshot({ path: `ghost-final.png`, fullPage: true });
             
-            // Get the final result
+            // Try one more comprehensive search
             result = await page.evaluate(() => {
-                const outputDiv = document.querySelector('div.grow.bg-white.p-4.pt-3.rounded-br-xl.overflow-y-auto.leading-relaxed.h-60');
-                if (outputDiv) {
-                    const span = outputDiv.querySelector('span.text-gray-600');
-                    if (span && span.textContent !== 'Your humanized text will appear here.') {
-                        return span.textContent.trim();
+                // Get ALL text from the right side
+                const rightContainer = document.querySelector('.grid > div:last-child');
+                if (rightContainer) {
+                    // Get all text nodes
+                    const walker = document.createTreeWalker(rightContainer, NodeFilter.SHOW_TEXT);
+                    let node;
+                    let allText = '';
+                    
+                    while (node = walker.nextNode()) {
+                        const text = node.textContent.trim();
+                        if (text && 
+                            !text.includes('Your humanized text will appear here') &&
+                            !text.includes('Words') &&
+                            text.length > 10) {
+                            allText += text + ' ';
+                        }
                     }
-                    // Fallback to any text in the div
-                    const allText = outputDiv.textContent?.trim() || '';
-                    if (allText && !allText.includes('Your humanized text will appear here')) {
-                        return allText;
-                    }
+                    
+                    return allText.trim();
                 }
                 return '';
             });
@@ -217,7 +233,7 @@ async function humanizeWithGhostAI(text) {
         console.log('Final result length:', result?.length || 0);
         console.log('Final result preview:', result?.substring(0, 200) || 'No result');
         
-        return result || 'Processing completed but no humanized text was generated. Please try again.';
+        return result || 'Ghost AI processing completed but no humanized text was detected. This might be a temporary issue with the service.';
         
     } catch (error) {
         console.error('Error with Ghost AI:', error.message);
