@@ -12,7 +12,7 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
-// Form result handler
+// JotForm result handler
 app.post('/result', async (req, res) => {
     try {
         const submission = req.body;
@@ -56,7 +56,7 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Rewritify automation core
+// Rewritify automation
 async function humanizeWithRewritifyAI(text) {
     const browser = await chromium.launch({
         headless: true,
@@ -64,56 +64,42 @@ async function humanizeWithRewritifyAI(text) {
     });
 
     const page = await browser.newPage();
+
     try {
-        console.log("Launching Rewritify...");
+        console.log("🌐 Launching Rewritify...");
         await page.goto('https://rewritify.ai/', { waitUntil: 'domcontentloaded', timeout: 60000 });
-        await page.waitForTimeout(4000);
 
-        console.log("Typing input...");
-        await page.click('div.tiptap.ProseMirror[contenteditable="true"]');
-        await page.keyboard.type(text, { delay: 10 });
+        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 10000 });
+        console.log("✏️ Filling input...");
+        await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', text);
+        await page.waitForTimeout(1000);
 
-        console.log("Clicking humanize...");
+        console.log("🚀 Clicking Humanize...");
         await page.click('button:has-text("Humanize")');
         await page.waitForTimeout(8000);
 
-        // 🧠 Log all ProseMirror blocks
-        const proseBlocks = await page.evaluate(() => {
-            const blocks = Array.from(document.querySelectorAll('div.tiptap.ProseMirror'));
-            return blocks.map(el => ({
-                content: el.textContent?.trim(),
-                readOnly: el.getAttribute('contenteditable'),
-                className: el.className
-            }));
-        });
-        console.log("🧩 ProseMirror blocks:\n", proseBlocks);
-
-        // 🧠 Try extracting from read-only ProseMirror
         let result = '';
         for (let i = 0; i < 15; i++) {
             await page.waitForTimeout(1000);
             result = await page.evaluate(() => {
-                const el = document.querySelector('div.tiptap.ProseMirror[contenteditable="false"]');
+                const el = document.querySelector(
+                    '#outputView div.tiptap.ProseMirror[contenteditable="false"]'
+                );
                 return el?.innerText?.trim() || '';
             });
             if (result.length > 50) break;
         }
 
-        if (!result) {
-            console.log("⚠️ Fallback: dumping full page text...");
-            const allText = await page.evaluate(() => document.body.innerText);
-            console.log("📄 Page dump:\n", allText.slice(0, 500) + '...');
-        }
-
         return result || 'Processing completed but no humanized text was returned.';
     } catch (err) {
-        console.error("❌ Error during automation:", err.message);
+        console.error("❌ Automation error:", err.message);
         return `Error: ${err.message}`;
     } finally {
         await browser.close();
     }
 }
 
+// Start server
 const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`✅ Server running on port ${PORT}`);
 });
