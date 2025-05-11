@@ -9,109 +9,99 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Graceful shutdown
+process.on('SIGTERM', () => {
+    server.close(() => {
+        console.log('HTTP server closed');
+        process.exit(0);
+    });
+});
+
 // Health check
 app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
-// Result display route
+// Result page
 app.post('/result', async (req, res) => {
     try {
         const submission = req.body;
         let textToHumanize = '';
 
         for (const [key, value] of Object.entries(submission)) {
-            if (key.includes('email') || key.includes('name')) continue;
-            if (typeof value === 'string' && value.length > 20) {
+            if (
+                typeof value === 'string' &&
+                value.length > 20 &&
+                !key.includes('email')
+            ) {
                 textToHumanize = value;
                 break;
             }
         }
 
-        console.log('Text to humanize:', textToHumanize);
-        const humanized = await humanizeWithRewritifyAI(textToHumanize.trim());
+        const humanized = await humanizeWithRewritify(textToHumanize);
 
         res.send(`
             <!DOCTYPE html>
             <html>
-            <head>
-                <title>Humanized Result</title>
-                <style>
-                    body { font-family: Arial, sans-serif; max-width: 800px; margin: 40px auto; padding: 20px; }
-                    .container { background: #f5f5f5; padding: 30px; border-radius: 10px; }
-                    .result, .original { white-space: pre-wrap; background: white; padding: 20px; border-radius: 5px; margin-top: 20px; }
-                </style>
+            <head><title>Humanized Output</title>
+            <style>
+                body { font-family: sans-serif; padding: 2em; max-width: 800px; margin: auto; }
+                .result { background: #f0f0f0; padding: 1em; border-radius: 10px; white-space: pre-wrap; }
+                .original { margin-top: 2em; font-size: 0.9em; color: #555; }
+            </style>
             </head>
             <body>
-                <div class="container">
-                    <h1>Thank You!</h1>
-                    <p>Your text has been humanized with Rewritify AI:</p>
-                    <div class="original"><strong>Original:</strong><br>${textToHumanize}</div>
-                    <div class="result"><strong>Humanized:</strong><br>${humanized}</div>
-                </div>
+                <h2>✅ Humanized Result:</h2>
+                <div class="result">${humanized}</div>
+                <div class="original"><strong>Original Text:</strong><br>${textToHumanize}</div>
             </body>
             </html>
         `);
-    } catch (err) {
-        console.error('Error in /result:', err);
-        res.status(500).send('Error processing your request');
+    } catch (e) {
+        console.error(e);
+        res.status(500).send('Error processing your request.');
     }
 });
 
-// Rewritify automation core
-async function humanizeWithRewritifyAI(text) {
+// Rewritify AI automation
+async function humanizeWithRewritify(input) {
     const browser = await chromium.launch({
         headless: true,
-        args: ['--no-sandbox', '--disable-setuid-sandbox']
+        args: ['--no-sandbox']
     });
 
-    const page = await browser.newPage();
-
     try {
-        console.log("🌐 Opening Rewritify...");
-        await page.goto('https://rewritify.ai/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        const context = await browser.newContext({
+            userAgent:
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/114.0 Safari/537.36',
+            viewport: { width: 1280, height: 800 }
+        });
 
-        await page.waitForTimeout(2000);
-        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 30000 });
+        const page = await context.newPage();
+        await page.goto('https://rewritify.ai', { waitUntil: 'load', timeout: 60000 });
 
-        console.log("✏️ Filling input...");
-        await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', text);
-        await page.waitForTimeout(1000);
+        // Type into the editor
+        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]');
+        await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', input);
 
-        console.log("🚀 Clicking Humanize...");
+        // Click Humanize button
         await page.click('button:has-text("Humanize")');
-        await page.waitForTimeout(8000);
+        await page.waitForTimeout(10000); // wait for generation
 
-        // 🔍 Extract best humanized output
-        let result = '';
-        for (let i = 0; i < 15; i++) {
-            await page.waitForTimeout(1000);
-            result = await page.evaluate((inputText) => {
-                const blocks = Array.from(document.querySelectorAll('div.tiptap.ProseMirror[contenteditable="false"]'));
+        // Extract result
+        const output = await page.textContent(
+            'div.scrollbar.h-full.overflow-y-auto div.tiptap.ProseMirror[contenteditable="false"]'
+        );
 
-                let best = '';
-                for (const block of blocks) {
-                    const text = block.innerText?.trim();
-                    if (!text) continue;
-                    if (text.length > best.length && text !== inputText && text.length > 50) {
-                        best = text;
-                    }
-                }
-
-                return best;
-            }, text);
-
-            if (result.length > 50) break;
-        }
-
-        return result || 'Processing completed but no humanized text was returned.';
+        return output?.trim() || 'Processing completed but no humanized text was returned.';
     } catch (err) {
-        console.error("❌ Automation error:", err.message);
+        console.error('❌ Error during automation:', err);
         return `Error: ${err.message}`;
     } finally {
         await browser.close();
     }
 }
 
-// Start server
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`✅ Server running on port ${PORT}`);
+// Launch server
+const server = app.listen(PORT, () => {
+    console.log(`🚀 Server is running on port ${PORT}`);
 });
