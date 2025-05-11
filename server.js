@@ -9,17 +9,10 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received, shutting down gracefully...');
-    server.close(() => {
-        console.log('HTTP server closed');
-        process.exit(0);
-    });
-});
-
+// Health check
 app.get('/health', (req, res) => res.json({ status: 'healthy' }));
 
+// Form result handler
 app.post('/result', async (req, res) => {
     try {
         const submission = req.body;
@@ -34,7 +27,6 @@ app.post('/result', async (req, res) => {
         }
 
         console.log('Text to humanize:', textToHumanize);
-
         const humanized = await humanizeWithRewritifyAI(textToHumanize.trim());
 
         res.send(`
@@ -64,52 +56,64 @@ app.post('/result', async (req, res) => {
     }
 });
 
+// Rewritify automation core
 async function humanizeWithRewritifyAI(text) {
-    let browser;
+    const browser = await chromium.launch({
+        headless: true,
+        args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
     try {
-        console.log('Launching browser...');
-        browser = await chromium.launch({
-            headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+        console.log("Launching Rewritify...");
+        await page.goto('https://rewritify.ai/', { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForTimeout(4000);
+
+        console.log("Typing input...");
+        await page.click('div.tiptap.ProseMirror[contenteditable="true"]');
+        await page.keyboard.type(text, { delay: 10 });
+
+        console.log("Clicking humanize...");
+        await page.click('button:has-text("Humanize")');
+        await page.waitForTimeout(8000);
+
+        // 🧠 Log all ProseMirror blocks
+        const proseBlocks = await page.evaluate(() => {
+            const blocks = Array.from(document.querySelectorAll('div.tiptap.ProseMirror'));
+            return blocks.map(el => ({
+                content: el.textContent?.trim(),
+                readOnly: el.getAttribute('contenteditable'),
+                className: el.className
+            }));
         });
+        console.log("🧩 ProseMirror blocks:\n", proseBlocks);
 
-        const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            viewport: { width: 1280, height: 720 }
-        });
-
-        const page = await context.newPage();
-        await page.goto('https://rewritify.ai/', { waitUntil: 'networkidle', timeout: 30000 });
-        await page.waitForTimeout(5000);
-
-        console.log('Typing input...');
-        await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', text);
-
-        console.log('Clicking humanize...');
-        await page.click('button.coco-btn.css-nx3rhx.coco-btn-primary');
-        await page.waitForTimeout(10000);
-
+        // 🧠 Try extracting from read-only ProseMirror
         let result = '';
-        for (let i = 0; i < 30; i++) {
+        for (let i = 0; i < 15; i++) {
             await page.waitForTimeout(1000);
             result = await page.evaluate(() => {
-                const el = document.querySelector(
-                    'div.editor_tiptap__f6ZIP.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror[contenteditable="false"]'
-                );
+                const el = document.querySelector('div.tiptap.ProseMirror[contenteditable="false"]');
                 return el?.innerText?.trim() || '';
             });
             if (result.length > 50) break;
         }
 
+        if (!result) {
+            console.log("⚠️ Fallback: dumping full page text...");
+            const allText = await page.evaluate(() => document.body.innerText);
+            console.log("📄 Page dump:\n", allText.slice(0, 500) + '...');
+        }
+
         return result || 'Processing completed but no humanized text was returned.';
-    } catch (error) {
-        console.error('Rewritify error:', error);
-        return 'Error during humanization.';
+    } catch (err) {
+        console.error("❌ Error during automation:", err.message);
+        return `Error: ${err.message}`;
     } finally {
-        if (browser) await browser.close();
+        await browser.close();
     }
 }
 
 const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on port ${PORT}`);
+    console.log(`✅ Server running on port ${PORT}`);
 });
