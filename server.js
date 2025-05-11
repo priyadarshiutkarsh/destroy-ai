@@ -129,38 +129,57 @@ async function humanizeWithRewritifyAI(text) {
         await page.click('button.coco-btn.css-nx3rhx.coco-btn-primary');
         console.log('Humanize button clicked');
         
-        // Wait for the result to appear
+        // Wait for generation to complete
+        console.log('Waiting for generation to complete...');
+        await page.waitForTimeout(10000); // 10 seconds wait
+        
+        // Wait for the result with multiple selector attempts
         let result = '';
         let attempts = 0;
-        const maxAttempts = 30; // 30 seconds max
+        const maxAttempts = 30;
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check for the output content
-            const outputContent = await page.evaluate((originalText) => {
-                // Find the output editor
-                const outputEditor = document.querySelector('div.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror');
+            // Try multiple selectors for the output
+            const outputText = await page.evaluate(() => {
+                // Selector 1: The most specific one from the HTML
+                let outputEditor = document.querySelector('#outputView div.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror[contenteditable="false"]');
                 
                 if (outputEditor) {
-                    const text = outputEditor.textContent || outputEditor.innerText || '';
-                    
-                    // Make sure we have actual content and not just a placeholder
-                    if (text && 
-                        text.trim() !== '' && 
-                        text !== originalText && 
-                        text.length > 20) {
+                    const text = outputEditor.innerText || outputEditor.textContent || '';
+                    if (text && text.trim().length > 50) {
+                        return text.trim();
+                    }
+                }
+                
+                // Selector 2: Try without ID scope
+                outputEditor = document.querySelector('div.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror[contenteditable="false"]');
+                
+                if (outputEditor) {
+                    const text = outputEditor.innerText || outputEditor.textContent || '';
+                    if (text && text.trim().length > 50) {
+                        return text.trim();
+                    }
+                }
+                
+                // Selector 3: Go for the p tag directly
+                const pElement = document.querySelector('#outputView div.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror[contenteditable="false"] p');
+                
+                if (pElement) {
+                    const text = pElement.innerText || pElement.textContent || '';
+                    if (text && text.trim().length > 50) {
                         return text.trim();
                     }
                 }
                 
                 return '';
-            }, text);
+            });
             
-            console.log(`Attempt ${attempts}: Found ${outputContent.length} characters`);
+            console.log(`Attempt ${attempts}: Found ${outputText.length} characters`);
             
-            if (outputContent && outputContent.length > 20) {
-                result = outputContent;
+            if (outputText && outputText.length > 50) {
+                result = outputText;
                 console.log(`Found result after ${attempts} seconds`);
                 console.log(`Preview: ${result.substring(0, 100)}...`);
                 break;
@@ -169,28 +188,35 @@ async function humanizeWithRewritifyAI(text) {
             attempts++;
         }
         
-        // If still no result, try final extraction
+        // If still no result, do a comprehensive search
         if (!result) {
-            console.log('Trying final extraction...');
-            
-            // Wait a bit more and try again
-            await page.waitForTimeout(5000);
+            console.log('Trying comprehensive search...');
             
             result = await page.evaluate(() => {
-                // Try multiple selectors for the output
-                const selectors = [
-                    'div.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror',
-                    'div.OutputEditor_bypassEditor__OD8nR',
-                    'div.editor_tiptap__f6ZIP div.tiptap.ProseMirror[contenteditable="false"]'
-                ];
+                // Look for any div with the OutputEditor class that contains text
+                const possibleContainers = document.querySelectorAll('div.OutputEditor_bypassEditor__OD8nR');
                 
-                for (const selector of selectors) {
-                    const element = document.querySelector(selector);
-                    if (element) {
-                        const text = element.textContent || element.innerText || '';
-                        if (text && text.length > 50) {
-                            return text.trim();
+                for (const container of possibleContainers) {
+                    // Get all text from this container
+                    const allText = container.innerText || container.textContent || '';
+                    
+                    // Extract just the main content (before "Human-written" appears)
+                    const lines = allText.split('\n');
+                    let mainContent = '';
+                    
+                    for (const line of lines) {
+                        if (line.includes('Human-written') || line.includes('Words')) {
+                            break;
                         }
+                        if (line.trim().length > 0) {
+                            mainContent += line.trim() + ' ';
+                        }
+                    }
+                    
+                    mainContent = mainContent.trim();
+                    
+                    if (mainContent.length > 100) {
+                        return mainContent;
                     }
                 }
                 
