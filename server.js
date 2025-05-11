@@ -75,6 +75,22 @@ app.post('/result', async (req, res) => {
     }
 });
 
+// Helper function to decode HTML entities
+function decodeHtmlEntities(text) {
+    const entities = {
+        '&lt;': '<',
+        '&gt;': '>',
+        '&amp;': '&',
+        '&quot;': '"',
+        '&#x27;': "'",
+        '&#x60;': '`'
+    };
+    
+    return text.replace(/&[^;]+;/g, function(entity) {
+        return entities[entity] || entity;
+    });
+}
+
 // Undetectable AI humanization function
 async function humanizeWithUndetectableAI(text) {
     let browser;
@@ -107,7 +123,7 @@ async function humanizeWithUndetectableAI(text) {
         // Wait for the page to be fully loaded
         await page.waitForTimeout(5000);
         
-        // Fill the input textarea using the specific selector
+        // Fill the input textarea
         const inputTextarea = await page.locator('textarea.Home_editor__textarea__W6jTe').first();
         await inputTextarea.fill(text);
         console.log('Filled input text');
@@ -116,23 +132,30 @@ async function humanizeWithUndetectableAI(text) {
         await page.click('button.Home_editor__button__iu08P');
         console.log('Clicked Humanize button');
         
-        // Wait for the result textarea to populate
+        // Wait for the result textarea to appear and populate
         let result = '';
         let attempts = 0;
-        const maxAttempts = 60;
+        const maxAttempts = 30; // 30 seconds max (since you said it takes ~20 seconds)
         
         while (attempts < maxAttempts && !result) {
             await page.waitForTimeout(1000);
             
-            // Check the result textarea using the specific selector
+            // Check for the result textarea that appears after processing
             const resultText = await page.evaluate((originalText) => {
-                // Get the result textarea with the combined classes
+                // Find the result textarea with both classes
                 const resultTextarea = document.querySelector('textarea.Home_editor__textarea__W6jTe.Home_editor__result__GpHzx');
                 
-                if (resultTextarea && resultTextarea.value) {
-                    const content = resultTextarea.value.trim();
-                    // Make sure it's not the same as original and not a placeholder
-                    if (content && content !== originalText && content !== 'Enter text here' && content.length > 10) {
+                if (resultTextarea) {
+                    // Get the text content (innerHTML for HTML entities)
+                    let content = resultTextarea.innerHTML || resultTextarea.value || '';
+                    
+                    // Skip if it's still empty or has placeholder
+                    if (content && 
+                        content !== originalText && 
+                        content !== 'Enter text here' && 
+                        content.length > 10 &&
+                        !content.includes('&lt;textarea') // Skip if it's showing the HTML structure
+                    ) {
                         return content;
                     }
                 }
@@ -143,50 +166,70 @@ async function humanizeWithUndetectableAI(text) {
             console.log(`Attempt ${attempts}: Found ${resultText.length} characters`);
             
             if (resultText && resultText.length > 10) {
-                result = resultText;
+                // Decode HTML entities
+                result = decodeHtmlEntities(resultText);
                 console.log(`Found result after ${attempts} seconds`);
                 console.log(`Preview: ${result.substring(0, 100)}...`);
                 break;
             }
             
             attempts++;
-            
-            // Take screenshot every 20 seconds for debugging
-            if (attempts % 20 === 0) {
-                await page.screenshot({ path: `undetectable-debug-${attempts}.png`, fullPage: true });
-            }
         }
         
-        // If still no result, try final extraction
+        // If still no result, try a final extraction
         if (!result) {
-            console.log('No result found, trying final extraction...');
+            console.log('Waiting for textarea to fully populate...');
             
-            // Wait a bit more for any async processing
-            await page.waitForTimeout(5000);
+            // Wait specifically for the result textarea to appear
+            await page.waitForSelector('textarea.Home_editor__textarea__W6jTe.Home_editor__result__GpHzx', {
+                timeout: 25000,
+                state: 'visible'
+            });
             
-            // Final attempt to get the result
+            // Get the final result with proper handling
             result = await page.evaluate(() => {
-                // Try the specific selector first
                 const resultTextarea = document.querySelector('textarea.Home_editor__textarea__W6jTe.Home_editor__result__GpHzx');
-                if (resultTextarea && resultTextarea.value && resultTextarea.value.trim()) {
-                    return resultTextarea.value.trim();
-                }
                 
-                // Try any textarea that might contain the result
-                const allTextareas = document.querySelectorAll('textarea');
-                for (const ta of allTextareas) {
-                    if (ta.value && ta.value.length > 50 && !ta.classList.contains('Home_editor__textarea__W6jTe')) {
-                        return ta.value.trim();
+                if (resultTextarea) {
+                    // Try multiple methods to get the content
+                    let content = '';
+                    
+                    // Method 1: innerHTML (for HTML entities)
+                    content = resultTextarea.innerHTML;
+                    
+                    // Method 2: textContent
+                    if (!content || content.includes('&lt;textarea')) {
+                        content = resultTextarea.textContent;
                     }
+                    
+                    // Method 3: value
+                    if (!content || content.includes('&lt;textarea')) {
+                        content = resultTextarea.value;
+                    }
+                    
+                    return content || '';
                 }
                 
                 return '';
             });
+            
+            // Clean up and decode entities
+            if (result) {
+                result = decodeHtmlEntities(result);
+                
+                // If it still contains HTML structure, extract just the text
+                if (result.includes('&lt;textarea') || result.includes('<textarea')) {
+                    const textMatch = result.match(/>([^<]*)</);
+                    if (textMatch && textMatch[1]) {
+                        result = textMatch[1].trim();
+                    }
+                }
+            }
         }
         
         console.log('Final result length:', result?.length || 0);
         
-        return result || 'Undetectable AI processing completed but no humanized text was returned. Please try again.';
+        return result || 'Processing completed but no humanized text was returned. Please try again.';
         
     } catch (error) {
         console.error('Error with Undetectable AI:', error.message);
