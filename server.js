@@ -1,4 +1,115 @@
-const express = require('express');
+// Add a direct content extraction fallback approach
+async function extractContentDirectly(page, log) {
+    log('🔍 Attempting direct content extraction...');
+    
+    try {
+        // This is a more direct approach that doesn't rely on specific selectors
+        // It looks for content that appears to be the result
+        const directResult = await page.evaluate((originalTextStart) => {
+            // Get all text nodes that might contain our result
+            const getAllTextNodes = () => {
+                const textNodes = [];
+                const walk = document.createTreeWalker(
+                    document.body,
+                    NodeFilter.SHOW_TEXT,
+                    { acceptNode: node => node.textContent.trim().length > 50 ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_REJECT },
+                    false
+                );
+                
+                while (walk.nextNode()) {
+                    textNodes.push(walk.currentNode);
+                }
+                
+                return textNodes;
+            };
+            
+            const textNodes = getAllTextNodes();
+            
+            // Filter out nodes that are likely input (contain the original text)
+            // or are part of UI elements like buttons
+            const possibleResults = textNodes.filter(node => {
+                // Skip if it contains the original text
+                if (node.textContent.includes(originalTextStart)) {
+                    return false;
+                }
+                
+                // Skip if it's in a button or input
+                let parent = node.parentElement;
+                while (parent && parent !== document.body) {
+                    const tagName = parent.tagName.toLowerCase();
+                    if (tagName === 'button' || tagName === 'input' || 
+                        parent.getAttribute('role') === 'button' ||
+                        parent.textContent.toLowerCase().includes('humanize') ||
+                        parent.textContent.toLowerCase().includes('rewrite')) {
+                        return false;
+                    }
+                    parent = parent.parentElement;
+                }
+                
+                return true;
+            });
+            
+            // Sort by length, with preference to longer results
+            possibleResults.sort((a, b) => 
+                b.textContent.trim().length - a.textContent.trim().length
+            );
+            
+            // Return the longest result if available
+            return possibleResults.length > 0 ? 
+                possibleResults[0].textContent.trim() : '';
+        }, text.substring(0, 30));
+        
+        if (directResult && directResult.length > 100) {
+            log(`✅ Found result using direct content extraction: ${directResult.length} characters`);
+            return directResult;
+        }
+        
+        // If that didn't work, try an even more aggressive approach
+        return await page.evaluate(() => {
+            // Look for any element that might contain our result
+            const candidates = [];
+            
+            // Check for results in common output containers
+            const containerSelectors = [
+                '.output', '.result', '.generated', '.ai-output', 
+                '.answer', '.response', '.rewritten', '.humanized'
+            ];
+            
+            for (const selector of containerSelectors) {
+                const elements = document.querySelectorAll(selector);
+                for (const el of elements) {
+                    candidates.push({
+                        text: el.textContent.trim(),
+                        length: el.textContent.trim().length,
+                        element: el
+                    });
+                }
+            }
+            
+            // Check all divs that have significant text
+            const divs = document.querySelectorAll('div');
+            for (const div of divs) {
+                const text = div.textContent.trim();
+                if (text.length > 100) {
+                    candidates.push({
+                        text: text,
+                        length: text.length,
+                        element: div
+                    });
+                }
+            }
+            
+            // Sort by text length
+            candidates.sort((a, b) => b.length - a.length);
+            
+            // Return the longest candidate text
+            return candidates.length > 0 ? candidates[0].text : '';
+        });
+    } catch (e) {
+        log(`⚠️ Direct content extraction failed: ${e.message}`);
+        return '';
+    }
+}const express = require('express');
 const cors = require('cors');
 const { chromium } = require('playwright');
 const fs = require('fs');
@@ -92,7 +203,7 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Improved Rewritify AI humanization function
+// Improved Rewritify AI humanization function with direct content scraping
 async function humanizeWithRewritify(text) {
     let browser;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
@@ -117,13 +228,17 @@ async function humanizeWithRewritify(text) {
                 '--disable-dev-shm-usage',
                 '--disable-blink-features=AutomationControlled',
                 '--disable-features=IsolateOrigins,site-per-process',
-                '--disable-web-security'
+                '--disable-web-security',
+                '--font-render-hinting=none',  // Reduce font loading issues
+                '--disable-gpu',               // Disable GPU acceleration
+                '--disable-font-subpixel-positioning', // Reduce font rendering issues
+                '--disable-lcd-text'           // Reduce font rendering issues
             ]
         });
         
         const context = await browser.newContext({
             userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
-            viewport: { width: 1920, height: 1080 },
+            viewport: { width: 1280, height: 720 }, // Smaller viewport to reduce rendering load
             deviceScaleFactor: 1,
             hasTouch: false,
             isMobile: false,
@@ -183,9 +298,10 @@ async function humanizeWithRewritify(text) {
         // Navigate to Rewritify AI with enhanced page loading
         log('🌐 Navigating to Rewritify.ai...');
         try {
+            // First attempt with minimal wait conditions to avoid timeout
             const response = await page.goto('https://rewritify.ai/', {
-                waitUntil: 'networkidle',
-                timeout: 60000
+                waitUntil: 'domcontentloaded',  // Use domcontentloaded instead of networkidle
+                timeout: 30000
             });
             
             if (!response || !response.ok()) {
@@ -193,24 +309,43 @@ async function humanizeWithRewritify(text) {
             }
             
             log(`✅ Loaded Rewritify AI: ${response.status()}`);
+            
+            // Wait a bit for any dynamic content to load
+            await page.waitForTimeout(3000);
+            
         } catch (navError) {
             log(`⚠️ Navigation issue: ${navError.message}`);
             
-            // Try again with domcontentloaded instead
-            log('🔄 Retrying with domcontentloaded...');
-            await page.goto('https://rewritify.ai/', {
-                waitUntil: 'domcontentloaded',
-                timeout: 60000
-            });
-            
-            // Wait for the page to stabilize
-            await page.waitForTimeout(5000);
+            // Try again with even more minimal settings
+            log('🔄 Retrying with minimal settings...');
+            try {
+                await page.goto('https://rewritify.ai/', {
+                    waitUntil: 'commit',  // Even less waiting than domcontentloaded
+                    timeout: 20000
+                });
+                
+                // Just wait a fixed amount of time
+                await page.waitForTimeout(5000);
+                log('✅ Page loaded with minimal settings');
+            } catch (minimalNavError) {
+                log(`❌ Even minimal navigation failed: ${minimalNavError.message}`);
+                throw new Error(`Could not load Rewritify.ai: ${minimalNavError.message}`);
+            }
         }
         
         // Take a screenshot to see what we're working with
-        const initialScreenshotPath = path.join(logsDir, `rewritify_initial_${timestamp}.png`);
-        await page.screenshot({ path: initialScreenshotPath, fullPage: true });
-        log(`📸 Initial screenshot saved to ${initialScreenshotPath}`);
+        try {
+            const initialScreenshotPath = path.join(logsDir, `rewritify_initial_${timestamp}.png`);
+            await page.screenshot({ 
+                path: initialScreenshotPath, 
+                fullPage: false,
+                timeout: 5000
+            });
+            log(`📸 Initial screenshot saved to ${initialScreenshotPath}`);
+        } catch (screenshotError) {
+            log(`⚠️ Initial screenshot failed: ${screenshotError.message}`);
+            // Continue execution even if screenshot fails
+        }
         
         // Save page HTML for debugging
         const initialHtmlPath = path.join(logsDir, `rewritify_initial_${timestamp}.html`);
@@ -348,8 +483,16 @@ async function humanizeWithRewritify(text) {
             log(`⚠️ Could not find input with standard selectors. Trying JavaScript evaluation...`);
             
             // Take another screenshot to see what we're working with
-            const beforeJSScreenshotPath = path.join(logsDir, `rewritify_beforeJS_${timestamp}.png`);
-            await page.screenshot({ path: beforeJSScreenshotPath, fullPage: true });
+            try {
+                const beforeJSScreenshotPath = path.join(logsDir, `rewritify_beforeJS_${timestamp}.png`);
+                await page.screenshot({ 
+                    path: beforeJSScreenshotPath, 
+                    fullPage: false,
+                    timeout: 5000
+                });
+            } catch (screenshotError) {
+                log(`⚠️ Screenshot before JS evaluation failed: ${screenshotError.message}`);
+            }
             
             // Try to find and fill any contenteditable element using JavaScript
             try {
@@ -395,10 +538,20 @@ async function humanizeWithRewritify(text) {
             throw new Error('Could not find or interact with the input editor on Rewritify.ai');
         }
         
-        // Take a screenshot after text input
-        const afterInputScreenshotPath = path.join(logsDir, `rewritify_afterInput_${timestamp}.png`);
-        await page.screenshot({ path: afterInputScreenshotPath, fullPage: true });
-        log(`📸 After input screenshot saved to ${afterInputScreenshotPath}`);
+        // Take a screenshot after text input with timeout handling
+        try {
+            const afterInputScreenshotPath = path.join(logsDir, `rewritify_afterInput_${timestamp}.png`);
+            // Use a non-fullPage screenshot with a shorter timeout
+            await page.screenshot({ 
+                path: afterInputScreenshotPath, 
+                fullPage: false,
+                timeout: 5000 
+            });
+            log(`📸 After input screenshot saved to ${afterInputScreenshotPath}`);
+        } catch (screenshotError) {
+            log(`⚠️ Screenshot failed: ${screenshotError.message}`);
+            // Continue execution even if screenshot fails
+        }
         
         // Try multiple selectors for the Humanize button
         const buttonSelectors = [
@@ -457,8 +610,16 @@ async function humanizeWithRewritify(text) {
             log(`⚠️ Could not find button with standard selectors. Trying JavaScript evaluation...`);
             
             // Take another screenshot
-            const beforeButtonJSScreenshotPath = path.join(logsDir, `rewritify_beforeButtonJS_${timestamp}.png`);
-            await page.screenshot({ path: beforeButtonJSScreenshotPath, fullPage: true });
+            try {
+                const beforeButtonJSScreenshotPath = path.join(logsDir, `rewritify_beforeButtonJS_${timestamp}.png`);
+                await page.screenshot({ 
+                    path: beforeButtonJSScreenshotPath, 
+                    fullPage: false,
+                    timeout: 5000
+                });
+            } catch (screenshotError) {
+                log(`⚠️ Screenshot before button JS evaluation failed: ${screenshotError.message}`);
+            }
             
             // Try to find and click any button that looks like a humanize button
             try {
@@ -515,9 +676,17 @@ async function humanizeWithRewritify(text) {
         await page.waitForTimeout(30000); // 30 seconds to allow for generation
         
         // Take a screenshot after generation
-        const afterGenerationScreenshotPath = path.join(logsDir, `rewritify_afterGeneration_${timestamp}.png`);
-        await page.screenshot({ path: afterGenerationScreenshotPath, fullPage: true });
-        log(`📸 After generation screenshot saved to ${afterGenerationScreenshotPath}`);
+        try {
+            const afterGenerationScreenshotPath = path.join(logsDir, `rewritify_afterGeneration_${timestamp}.png`);
+            await page.screenshot({ 
+                path: afterGenerationScreenshotPath, 
+                fullPage: false,
+                timeout: 5000
+            });
+            log(`📸 After generation screenshot saved to ${afterGenerationScreenshotPath}`);
+        } catch (screenshotError) {
+            log(`⚠️ After generation screenshot failed: ${screenshotError.message}`);
+        }
         
         // Try multiple selectors to find the result with a more thorough approach
         let result = '';
@@ -654,14 +823,35 @@ async function humanizeWithRewritify(text) {
             }
         }
         
+        // If we still have no result, try direct content extraction as a last resort
+        if (!result || result.trim().length <= 50) {
+            log(`⚠️ No sufficient result with standard methods. Attempting direct content extraction...`);
+            
+            result = await extractContentDirectly(page, log);
+            
+            if (result && result.trim().length > 50) {
+                log(`✅ Direct content extraction successful: ${result.length} characters`);
+            } else {
+                log(`⚠️ Direct content extraction failed to get sufficient content`);
+            }
+        }
+        
         // Final check - if we still don't have a result, take a screenshot and save HTML
         if (!result || result.trim().length <= 50) {
             log(`⚠️ No sufficient result found after all attempts. Saving diagnostic information...`);
             
             // Take a final screenshot
-            const finalScreenshotPath = path.join(logsDir, `rewritify_final_${timestamp}.png`);
-            await page.screenshot({ path: finalScreenshotPath, fullPage: true });
-            log(`📸 Final screenshot saved to ${finalScreenshotPath}`);
+            try {
+                const finalScreenshotPath = path.join(logsDir, `rewritify_final_${timestamp}.png`);
+                await page.screenshot({ 
+                    path: finalScreenshotPath, 
+                    fullPage: false,
+                    timeout: 5000
+                });
+                log(`📸 Final screenshot saved to ${finalScreenshotPath}`);
+            } catch (screenshotError) {
+                log(`⚠️ Final screenshot failed: ${screenshotError.message}`);
+            }
             
             // Save the final HTML
             const finalHtmlPath = path.join(logsDir, `rewritify_final_${timestamp}.html`);
@@ -685,7 +875,11 @@ async function humanizeWithRewritify(text) {
                 const pages = await browser.pages();
                 if (pages.length > 0) {
                     const errorScreenshotPath = path.join(logsDir, `rewritify_error_${timestamp}.png`);
-                    await pages[0].screenshot({ path: errorScreenshotPath, fullPage: true });
+                    await pages[0].screenshot({ 
+                        path: errorScreenshotPath, 
+                        fullPage: false,
+                        timeout: 5000
+                    });
                     log(`📸 Error screenshot saved to ${errorScreenshotPath}`);
                     
                     // Save the HTML too
