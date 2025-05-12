@@ -92,175 +92,592 @@ app.post('/result', async (req, res) => {
     }
 });
 
-// Rewritify AI humanization function
+// Improved Rewritify AI humanization function
 async function humanizeWithRewritify(text) {
     let browser;
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const logFilePath = path.join(logsDir, `rewritify_log_${timestamp}.txt`);
+    
+    // Function to log both to console and file
+    const log = (message) => {
+        const logMsg = `[${new Date().toISOString()}] ${message}`;
+        console.log(logMsg);
+        fs.appendFileSync(logFilePath, logMsg + '\n');
+    };
     
     try {
-        console.log('🚀 Starting humanization with Rewritify AI');
+        log('🚀 Starting humanization with Rewritify AI');
         
+        // Configure browser with stealth settings
         browser = await chromium.launch({ 
             headless: true,
             args: [
                 '--no-sandbox', 
                 '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage'
+                '--disable-dev-shm-usage',
+                '--disable-blink-features=AutomationControlled',
+                '--disable-features=IsolateOrigins,site-per-process',
+                '--disable-web-security'
             ]
         });
         
         const context = await browser.newContext({
-            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36'
+            userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+            viewport: { width: 1920, height: 1080 },
+            deviceScaleFactor: 1,
+            hasTouch: false,
+            isMobile: false,
+            javaScriptEnabled: true,
+            acceptDownloads: true,
+            // Add a locale to make the browser appear more legitimate
+            locale: 'en-US',
+            timezoneId: 'America/New_York',
+            geolocation: { longitude: -73.935242, latitude: 40.730610 },
+            permissions: ['geolocation']
+        });
+        
+        // Override automation flags
+        await context.addInitScript(() => {
+            Object.defineProperty(navigator, 'webdriver', { get: () => false });
+            Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+            Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+            
+            // Add fake notification permission
+            if (!window.Notification) {
+                window.Notification = { permission: 'granted' };
+            }
+            
+            // Overwrite the automation controller property
+            if (chrome) {
+                chrome.runtime = chrome.runtime || {};
+                chrome.runtime.sendMessage = function() {};
+            }
         });
         
         const page = await context.newPage();
         
-        // Navigate to Rewritify AI
-        console.log('🌐 Navigating to Rewritify.ai...');
-        await page.goto('https://rewritify.ai/', {
-            waitUntil: 'load',
-            timeout: 60000
+        // Emulate human-like behavior
+        await page.setExtraHTTPHeaders({
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+            'Accept-Encoding': 'gzip, deflate, br',
+            'Connection': 'keep-alive',
+            'Upgrade-Insecure-Requests': '1',
+            'Sec-Fetch-Dest': 'document',
+            'Sec-Fetch-Mode': 'navigate',
+            'Sec-Fetch-Site': 'none',
+            'Sec-Fetch-User': '?1',
+            'Cache-Control': 'max-age=0'
         });
         
-        console.log('✅ Loaded Rewritify AI');
+        // Add random mouse movements to avoid detection
+        page.mouse.move(Math.random() * 500, Math.random() * 500);
         
-        // Wait for the input editor to be visible
-        console.log('⏳ Waiting for input editor...');
-        await page.waitForSelector('div.tiptap.ProseMirror[contenteditable="true"]', { timeout: 15000 });
+        // Random scroll function to mimic human behavior
+        const randomScroll = async () => {
+            const scrollAmount = Math.floor(Math.random() * 100) + 50;
+            await page.mouse.wheel(0, scrollAmount);
+            await page.waitForTimeout(Math.random() * 1000 + 500);
+        };
         
-        // Fill the input editor
-        console.log('📝 Filling input text...');
-        await page.fill('div.tiptap.ProseMirror[contenteditable="true"]', text);
+        // Navigate to Rewritify AI with enhanced page loading
+        log('🌐 Navigating to Rewritify.ai...');
+        try {
+            const response = await page.goto('https://rewritify.ai/', {
+                waitUntil: 'networkidle',
+                timeout: 60000
+            });
+            
+            if (!response || !response.ok()) {
+                throw new Error(`Failed to load page: ${response ? response.status() : 'No response'}`);
+            }
+            
+            log(`✅ Loaded Rewritify AI: ${response.status()}`);
+        } catch (navError) {
+            log(`⚠️ Navigation issue: ${navError.message}`);
+            
+            // Try again with domcontentloaded instead
+            log('🔄 Retrying with domcontentloaded...');
+            await page.goto('https://rewritify.ai/', {
+                waitUntil: 'domcontentloaded',
+                timeout: 60000
+            });
+            
+            // Wait for the page to stabilize
+            await page.waitForTimeout(5000);
+        }
         
-        // Click the Humanize button
-        console.log('🖱️ Clicking Humanize button...');
-        await page.click('button:has-text("Humanize")');
+        // Take a screenshot to see what we're working with
+        const initialScreenshotPath = path.join(logsDir, `rewritify_initial_${timestamp}.png`);
+        await page.screenshot({ path: initialScreenshotPath, fullPage: true });
+        log(`📸 Initial screenshot saved to ${initialScreenshotPath}`);
         
-        // Wait for generation to complete
-        console.log('⏳ Waiting for generation to complete...');
-        await page.waitForTimeout(10000);
+        // Save page HTML for debugging
+        const initialHtmlPath = path.join(logsDir, `rewritify_initial_${timestamp}.html`);
+        fs.writeFileSync(initialHtmlPath, await page.content());
+        log(`💾 Initial HTML saved to ${initialHtmlPath}`);
         
-        // Try multiple selectors to find result
+        // Detect if there's a cookie consent dialog and handle it
+        try {
+            const cookieSelectors = [
+                'button:has-text("Accept")',
+                'button:has-text("Accept All")',
+                'button:has-text("I Agree")',
+                'button:has-text("OK")',
+                'button:has-text("Got it")',
+                'button[aria-label="Accept cookies"]',
+                '.cookie-consent-button',
+                '.consent-button',
+                '.accept-cookies'
+            ];
+            
+            for (const selector of cookieSelectors) {
+                const hasButton = await page.$(selector);
+                if (hasButton) {
+                    log(`🍪 Found cookie consent button: ${selector}`);
+                    await page.click(selector);
+                    await page.waitForTimeout(1000);
+                    break;
+                }
+            }
+        } catch (cookieError) {
+            log(`⚠️ Error handling cookie consent: ${cookieError.message}`);
+        }
+        
+        // Make some random movements to appear human-like
+        await randomScroll();
+        await page.mouse.move(Math.random() * 500, Math.random() * 500);
+        await page.waitForTimeout(1000 + Math.random() * 1000);
+        
+        // Try multiple selectors for the input editor with a more thorough approach
+        const inputSelectors = [
+            'div.tiptap.ProseMirror[contenteditable="true"]',
+            'div[contenteditable="true"]',
+            '.editor-container [contenteditable="true"]',
+            '.input-editor [contenteditable="true"]',
+            '.tiptap[contenteditable="true"]',
+            'div.ProseMirror[contenteditable="true"]',
+            // Try more general selectors as fallbacks
+            '[contenteditable="true"]',
+            'textarea',
+            'textarea.input-textarea',
+            // Try using XPath as a last resort
+            '//div[@contenteditable="true"]'
+        ];
+        
+        let inputFound = false;
+        let inputElement = null;
+        
+        for (const selector of inputSelectors) {
+            try {
+                log(`⏳ Trying input selector: ${selector}`);
+                
+                // Use a shorter timeout for each individual selector
+                if (selector.startsWith('//')) {
+                    // XPath selector
+                    inputElement = await page.waitForXPath(selector, { timeout: 5000 });
+                } else {
+                    // CSS selector
+                    inputElement = await page.waitForSelector(selector, { timeout: 5000 });
+                }
+                
+                if (inputElement) {
+                    // Test if we can actually interact with this element
+                    if (selector.startsWith('//')) {
+                        // For XPath selectors
+                        await inputElement.evaluate(el => {
+                            el.textContent = '';
+                            el.focus();
+                        });
+                    } else {
+                        // Try focus() first - this is more reliable in some cases
+                        await page.evaluate(selector => {
+                            const element = document.querySelector(selector);
+                            if (element) {
+                                element.textContent = '';
+                                element.focus();
+                            }
+                        }, selector);
+                    }
+                    
+                    // Wait a bit to see if the element stays focused
+                    await page.waitForTimeout(500);
+                    
+                    // Insert text using different methods
+                    log(`📝 Attempting to input text...`);
+                    
+                    // Try several methods to input text
+                    try {
+                        // Method 1: Using fill
+                        await inputElement.fill(text);
+                    } catch (fillErr) {
+                        log(`⚠️ Fill method failed: ${fillErr.message}`);
+                        
+                        try {
+                            // Method 2: Using type
+                            await inputElement.type(text, { delay: 10 });
+                        } catch (typeErr) {
+                            log(`⚠️ Type method failed: ${typeErr.message}`);
+                            
+                            try {
+                                // Method 3: Using evaluation
+                                await inputElement.evaluate((el, value) => {
+                                    el.textContent = value;
+                                    // Create and dispatch an input event
+                                    const event = new Event('input', { bubbles: true });
+                                    el.dispatchEvent(event);
+                                }, text);
+                            } catch (evalErr) {
+                                log(`⚠️ Evaluation method failed: ${evalErr.message}`);
+                                throw new Error('All input methods failed');
+                            }
+                        }
+                    }
+                    
+                    inputFound = true;
+                    log(`✅ Found and filled input with selector: ${selector}`);
+                    break;
+                }
+            } catch (e) {
+                log(`⚠️ Input selector failed: ${selector} - ${e.message}`);
+            }
+        }
+        
+        // If we still can't find the input, try a more aggressive approach
+        if (!inputFound) {
+            log(`⚠️ Could not find input with standard selectors. Trying JavaScript evaluation...`);
+            
+            // Take another screenshot to see what we're working with
+            const beforeJSScreenshotPath = path.join(logsDir, `rewritify_beforeJS_${timestamp}.png`);
+            await page.screenshot({ path: beforeJSScreenshotPath, fullPage: true });
+            
+            // Try to find and fill any contenteditable element using JavaScript
+            try {
+                inputFound = await page.evaluate((inputText) => {
+                    // Try to find any contenteditable element
+                    const editableElements = Array.from(document.querySelectorAll('[contenteditable="true"]'));
+                    
+                    if (editableElements.length > 0) {
+                        const mainEditor = editableElements[0];
+                        mainEditor.textContent = inputText;
+                        
+                        // Create and dispatch an input event
+                        const event = new Event('input', { bubbles: true });
+                        mainEditor.dispatchEvent(event);
+                        
+                        return true;
+                    }
+                    
+                    // If no contenteditable, try textareas
+                    const textareas = Array.from(document.querySelectorAll('textarea'));
+                    if (textareas.length > 0) {
+                        textareas[0].value = inputText;
+                        
+                        // Create and dispatch an input event
+                        const event = new Event('input', { bubbles: true });
+                        textareas[0].dispatchEvent(event);
+                        
+                        return true;
+                    }
+                    
+                    return false;
+                }, text);
+                
+                if (inputFound) {
+                    log(`✅ Found and filled input using JavaScript evaluation`);
+                }
+            } catch (jsError) {
+                log(`⚠️ JavaScript evaluation failed: ${jsError.message}`);
+            }
+        }
+        
+        if (!inputFound) {
+            throw new Error('Could not find or interact with the input editor on Rewritify.ai');
+        }
+        
+        // Take a screenshot after text input
+        const afterInputScreenshotPath = path.join(logsDir, `rewritify_afterInput_${timestamp}.png`);
+        await page.screenshot({ path: afterInputScreenshotPath, fullPage: true });
+        log(`📸 After input screenshot saved to ${afterInputScreenshotPath}`);
+        
+        // Try multiple selectors for the Humanize button
+        const buttonSelectors = [
+            'button:has-text("Humanize")',
+            'button.humanize-button',
+            'button:text("Humanize")',
+            'button.rewritify-button',
+            'button:has-text("Rewrite")',
+            'button:has-text("Generate")',
+            'button.generate-button',
+            // More generic selectors
+            'button.primary-button',
+            'button.main-action',
+            'button.action-button',
+            // Last resort XPath
+            '//button[contains(text(), "Humanize")]',
+            '//button[contains(text(), "Rewrite")]',
+            '//button[contains(text(), "Generate")]'
+        ];
+        
+        let buttonFound = false;
+        
+        for (const selector of buttonSelectors) {
+            try {
+                log(`⏳ Trying button selector: ${selector}`);
+                
+                // Use a shorter timeout for each selector
+                let buttonElement;
+                if (selector.startsWith('//')) {
+                    // XPath selector
+                    buttonElement = await page.waitForXPath(selector, { timeout: 5000 });
+                } else {
+                    // CSS selector
+                    buttonElement = await page.waitForSelector(selector, { timeout: 5000 });
+                }
+                
+                if (buttonElement) {
+                    // Click the button
+                    if (selector.startsWith('//')) {
+                        await buttonElement.click();
+                    } else {
+                        await page.click(selector);
+                    }
+                    
+                    buttonFound = true;
+                    log(`✅ Clicked button with selector: ${selector}`);
+                    break;
+                }
+            } catch (e) {
+                log(`⚠️ Button selector failed: ${selector} - ${e.message}`);
+            }
+        }
+        
+        // If we still can't find the button, try a more aggressive approach
+        if (!buttonFound) {
+            log(`⚠️ Could not find button with standard selectors. Trying JavaScript evaluation...`);
+            
+            // Take another screenshot
+            const beforeButtonJSScreenshotPath = path.join(logsDir, `rewritify_beforeButtonJS_${timestamp}.png`);
+            await page.screenshot({ path: beforeButtonJSScreenshotPath, fullPage: true });
+            
+            // Try to find and click any button that looks like a humanize button
+            try {
+                buttonFound = await page.evaluate(() => {
+                    // Keywords to look for in button text
+                    const keywords = ['humanize', 'rewrite', 'generate', 'submit', 'start'];
+                    
+                    // Get all buttons
+                    const buttons = Array.from(document.querySelectorAll('button'));
+                    
+                    // Find a button that contains one of our keywords
+                    for (const button of buttons) {
+                        const buttonText = button.textContent.toLowerCase();
+                        
+                        for (const keyword of keywords) {
+                            if (buttonText.includes(keyword)) {
+                                button.click();
+                                return true;
+                            }
+                        }
+                    }
+                    
+                    // If no button matches our keywords, try clicking the most prominent button
+                    if (buttons.length > 0) {
+                        // Sort buttons by size (area) - larger buttons are usually more important
+                        buttons.sort((a, b) => {
+                            const aRect = a.getBoundingClientRect();
+                            const bRect = b.getBoundingClientRect();
+                            return (bRect.width * bRect.height) - (aRect.width * aRect.height);
+                        });
+                        
+                        // Click the largest button
+                        buttons[0].click();
+                        return true;
+                    }
+                    
+                    return false;
+                });
+                
+                if (buttonFound) {
+                    log(`✅ Found and clicked button using JavaScript evaluation`);
+                }
+            } catch (jsError) {
+                log(`⚠️ JavaScript button evaluation failed: ${jsError.message}`);
+            }
+        }
+        
+        if (!buttonFound) {
+            throw new Error('Could not find the Humanize/Generate button on Rewritify.ai');
+        }
+        
+        // Wait for generation to complete with a longer timeout
+        log('⏳ Waiting for generation to complete...');
+        await page.waitForTimeout(30000); // 30 seconds to allow for generation
+        
+        // Take a screenshot after generation
+        const afterGenerationScreenshotPath = path.join(logsDir, `rewritify_afterGeneration_${timestamp}.png`);
+        await page.screenshot({ path: afterGenerationScreenshotPath, fullPage: true });
+        log(`📸 After generation screenshot saved to ${afterGenerationScreenshotPath}`);
+        
+        // Try multiple selectors to find the result with a more thorough approach
         let result = '';
         
-        // Primary selector
-        try {
-            console.log('🔍 Trying primary selector...');
-            result = await page.textContent(
-                'div.scrollbar.h-full.overflow-y-auto div.tiptap.ProseMirror[contenteditable="false"]',
-                { timeout: 30000 }
-            );
-            
-            if (result && result.trim().length > 50) {
-                console.log('✅ Found result with primary selector');
-            } else {
-                throw new Error('Primary selector returned insufficient text');
-            }
-        } catch (err) {
-            console.warn('⚠️ Primary selector failed:', err.message);
-            
-            // Fallback 1: Try alternate selector
+        // Expanded list of selectors for result content
+        const resultSelectors = [
+            // Original selectors
+            'div.scrollbar.h-full.overflow-y-auto div.tiptap.ProseMirror[contenteditable="false"]',
+            'div.editor_tiptap__f6ZIP.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror',
+            // Additional selectors
+            'div.tiptap.ProseMirror[contenteditable="false"]',
+            'div.output-editor .tiptap',
+            'div.result-container .tiptap',
+            'div.result-text',
+            'div.output-container .ProseMirror',
+            'div.result-area',
+            'div.output-text',
+            // More generic selectors
+            '.output-container',
+            '.result-container',
+            // Last resort
+            'div.ProseMirror:not([contenteditable="true"])'
+        ];
+        
+        for (const selector of resultSelectors) {
             try {
-                console.log('🔍 Trying fallback selector 1...');
-                result = await page.textContent(
-                    'div.editor_tiptap__f6ZIP.OutputEditor_bypassEditor__OD8nR div.tiptap.ProseMirror',
-                    { timeout: 5000 }
-                );
+                log(`🔍 Trying result selector: ${selector}`);
+                let content = await page.textContent(selector, { timeout: 5000 });
                 
-                if (result && result.trim().length > 50) {
-                    console.log('✅ Found result with fallback selector 1');
+                if (content && content.trim().length > 50) {
+                    result = content.trim();
+                    log(`✅ Found result with selector: ${selector}`);
+                    break;
                 } else {
-                    throw new Error('Fallback selector 1 returned insufficient text');
+                    log(`⚠️ Insufficient content (${content?.length || 0} chars) found with selector: ${selector}`);
                 }
-            } catch (err2) {
-                console.warn('⚠️ Fallback selector 1 failed:', err2.message);
+            } catch (e) {
+                log(`⚠️ Result selector failed: ${selector} - ${e.message}`);
+            }
+        }
+        
+        // If we still have no result, try looking for any significant text blocks
+        if (!result || result.trim().length <= 50) {
+            log(`⚠️ No sufficient result found with standard selectors. Trying to find any text blocks...`);
+            
+            try {
+                // Look for any paragraph or div with substantial text
+                const contentElements = await page.$$('p, div');
                 
-                // Fallback 2: Try any content-editable false div with substantial text
-                console.log('🔍 Trying fallback selector 2 (all content-editable=false divs)...');
-                const divs = await page.$$('div.tiptap.ProseMirror[contenteditable="false"]');
-                
-                for (const div of divs) {
-                    const divText = await div.textContent();
-                    if (divText && divText.trim().length > 100 && !divText.includes('Humanize')) {
-                        result = divText.trim();
-                        console.log('✅ Found result with fallback selector 2');
+                for (const element of contentElements) {
+                    const text = await element.textContent();
+                    
+                    // Check if this element contains significant text and isn't our input
+                    if (text && text.trim().length > 100 && !text.includes(text.substring(0, 20))) {
+                        result = text.trim();
+                        log(`✅ Found result text block with ${result.length} characters`);
                         break;
                     }
                 }
-                
-                // If still no result, try all paragraph elements
-                if (!result || result.trim().length <= 50) {
-                    console.log('🔍 Trying fallback selector 3 (all paragraphs)...');
-                    const paragraphs = await page.$$('div.tiptap.ProseMirror[contenteditable="false"] p');
-                    
-                    for (const p of paragraphs) {
-                        const pText = await p.textContent();
-                        if (pText && pText.trim().length > 100) {
-                            result = pText.trim();
-                            console.log('✅ Found result with fallback selector 3');
-                            break;
-                        }
-                    }
-                }
+            } catch (findBlocksError) {
+                log(`⚠️ Error finding text blocks: ${findBlocksError.message}`);
             }
         }
         
-        // Save debug info if no result
+        // If we still don't have a result, try a JavaScript evaluation approach
         if (!result || result.trim().length <= 50) {
-            console.log('⚠️ No sufficient result found, saving debug info...');
+            log(`⚠️ Still no sufficient result. Trying JavaScript evaluation...`);
             
-            // Take a screenshot
-            const screenshotPath = path.join(logsDir, `rewritify_screenshot_${timestamp}.png`);
-            await page.screenshot({ path: screenshotPath, fullPage: true });
-            console.log(`📸 Screenshot saved to ${screenshotPath}`);
-            
-            // Save page HTML
-            const htmlPath = path.join(logsDir, `rewritify_html_${timestamp}.html`);
-            const html = await page.content();
-            fs.writeFileSync(htmlPath, html);
-            console.log(`💾 HTML saved to ${htmlPath}`);
-            
-            // Try one more direct approach - get all visible text from the page
-            const allVisibleText = await page.evaluate(() => {
-                const walker = document.createTreeWalker(
-                    document.body,
-                    NodeFilter.SHOW_TEXT,
-                    {
-                        acceptNode: function(node) {
-                            // Skip hidden elements
-                            if (node.parentElement.offsetParent === null) {
-                                return NodeFilter.FILTER_SKIP;
+            try {
+                // Use JavaScript to find the largest text block that isn't our input
+                result = await page.evaluate((inputText) => {
+                    // Find all text nodes in the document
+                    const walker = document.createTreeWalker(
+                        document.body,
+                        NodeFilter.SHOW_TEXT,
+                        null,
+                        false
+                    );
+                    
+                    let node;
+                    let bestText = '';
+                    let bestLength = 0;
+                    
+                    // Get the first 20 chars of input to avoid selecting our own input
+                    const inputStart = inputText.substring(0, 20);
+                    
+                    while ((node = walker.nextNode())) {
+                        const text = node.nodeValue.trim();
+                        
+                        // Skip small text or text that looks like our input
+                        if (text.length <= 100 || text.includes(inputStart)) {
+                            continue;
+                        }
+                        
+                        // Find the element that contains this text
+                        let element = node.parentElement;
+                        
+                        // Check if this is hidden or in an editor area
+                        let isHidden = false;
+                        let isEditor = false;
+                        
+                        while (element && element !== document.body) {
+                            const style = window.getComputedStyle(element);
+                            if (style.display === 'none' || style.visibility === 'hidden') {
+                                isHidden = true;
+                                break;
                             }
-                            return NodeFilter.FILTER_ACCEPT;
+                            
+                            // Check if this is in an editor area (likely our input)
+                            if (element.getAttribute('contenteditable') === 'true' || 
+                                element.classList.contains('input-editor') || 
+                                element.classList.contains('editor-container')) {
+                                isEditor = true;
+                                break;
+                            }
+                            
+                            element = element.parentElement;
+                        }
+                        
+                        if (!isHidden && !isEditor && text.length > bestLength) {
+                            bestText = text;
+                            bestLength = text.length;
                         }
                     }
-                );
+                    
+                    return bestText;
+                }, text);
                 
-                let node;
-                let texts = [];
-                
-                while(node = walker.nextNode()) {
-                    const text = node.nodeValue.trim();
-                    if (text.length > 100 && !text.includes('Humanize') && !text.includes('Enter the text')) {
-                        texts.push(text);
-                    }
+                if (result && result.trim().length > 50) {
+                    log(`✅ Found result using JavaScript evaluation: ${result.length} characters`);
                 }
-                
-                return texts.join('\n\n');
-            });
-            
-            if (allVisibleText && allVisibleText.length > 100) {
-                result = allVisibleText;
-                console.log('✅ Found text using DOM tree walker');
+            } catch (jsEvalError) {
+                log(`⚠️ JavaScript evaluation for result failed: ${jsEvalError.message}`);
             }
         }
         
-        console.log(`📏 Final result length: ${result?.trim().length || 0}`);
+        // Final check - if we still don't have a result, take a screenshot and save HTML
+        if (!result || result.trim().length <= 50) {
+            log(`⚠️ No sufficient result found after all attempts. Saving diagnostic information...`);
+            
+            // Take a final screenshot
+            const finalScreenshotPath = path.join(logsDir, `rewritify_final_${timestamp}.png`);
+            await page.screenshot({ path: finalScreenshotPath, fullPage: true });
+            log(`📸 Final screenshot saved to ${finalScreenshotPath}`);
+            
+            // Save the final HTML
+            const finalHtmlPath = path.join(logsDir, `rewritify_final_${timestamp}.html`);
+            fs.writeFileSync(finalHtmlPath, await page.content());
+            log(`💾 Final HTML saved to ${finalHtmlPath}`);
+            
+            // Return a helpful error message
+            return `The AI humanizer service didn't return a valid result. This could be due to site changes, a temporary error, or detection of automation. Please try again later or check the logs for more information.`;
+        }
         
-        return result?.trim() || 'The AI humanizer service may be experiencing issues. Please try again later.';
+        log(`📏 Final result length: ${result?.trim().length || 0}`);
+        return result.trim();
         
     } catch (error) {
-        console.error('❌ Error with Rewritify AI:', error);
+        log(`❌ Error with Rewritify AI: ${error.message}`);
+        log(`${error.stack}`);
         
         // Try to take a screenshot if browser is still accessible
         if (browser) {
@@ -269,10 +686,15 @@ async function humanizeWithRewritify(text) {
                 if (pages.length > 0) {
                     const errorScreenshotPath = path.join(logsDir, `rewritify_error_${timestamp}.png`);
                     await pages[0].screenshot({ path: errorScreenshotPath, fullPage: true });
-                    console.log(`📸 Error screenshot saved to ${errorScreenshotPath}`);
+                    log(`📸 Error screenshot saved to ${errorScreenshotPath}`);
+                    
+                    // Save the HTML too
+                    const errorHtmlPath = path.join(logsDir, `rewritify_error_${timestamp}.html`);
+                    fs.writeFileSync(errorHtmlPath, await pages[0].content());
+                    log(`💾 Error HTML saved to ${errorHtmlPath}`);
                 }
             } catch (screenshotError) {
-                console.error('❌ Failed to take error screenshot:', screenshotError.message);
+                log(`❌ Failed to take error screenshot: ${screenshotError.message}`);
             }
         }
         
@@ -281,9 +703,9 @@ async function humanizeWithRewritify(text) {
         if (browser) {
             try {
                 await browser.close();
-                console.log('🔒 Browser closed');
+                log('🔒 Browser closed');
             } catch (e) {
-                console.error('❌ Error closing browser:', e.message);
+                log(`❌ Error closing browser: ${e.message}`);
             }
         }
     }
